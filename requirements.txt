@@ -1,0 +1,17 @@
+# Forecast
+pandas
+numpy
+requests
+python-dotenv
+openmeteo-requests
+retry-requests
+
+# ENTSO-E
+entsoe-py
+
+# DB
+libsql-client
+
+# Dashboard (solo per Streamlit Cloud, ignorato dal workflow)
+streamlit
+plotly
