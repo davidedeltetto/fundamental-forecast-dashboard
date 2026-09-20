@@ -38,20 +38,21 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 
 def _get_turso_client():
     """Client Turso sincrono. Ritorna None se le credenziali non sono configurate."""
+    import libsql_client
+    url   = st.secrets.get("TURSO_URL")   or os.environ.get("TURSO_URL")
+    token = st.secrets.get("TURSO_TOKEN") or os.environ.get("TURSO_TOKEN")
+    if not url or not token:
+        st.session_state["_turso_error"] = "credenziali mancanti"
+        return None
+    if url.startswith("libsql://"):
+        url = "https://" + url[len("libsql://"):]
+    elif url.startswith("wss://"):
+        url = "https://" + url[len("wss://"):]
+    st.session_state["_turso_url_used"] = url
     try:
-        import libsql_client
-        url   = st.secrets.get("TURSO_URL")   or os.environ.get("TURSO_URL")
-        token = st.secrets.get("TURSO_TOKEN") or os.environ.get("TURSO_TOKEN")
-        if not url or not token:
-            return None
-        # Forza HTTP (Hrana su https://) invece di WebSocket (libsql:// / wss://).
-        if url.startswith("libsql://"):
-            url = "https://" + url[len("libsql://"):]
-        elif url.startswith("wss://"):
-            url = "https://" + url[len("wss://"):]
         return libsql_client.create_client_sync(url=url, auth_token=token)
     except Exception as e:
-        st.session_state["_turso_error"] = f"get_client: {e}"
+        st.session_state["_turso_error"] = f"create_client: {e}"
         return None
 
 
@@ -427,20 +428,19 @@ with st.sidebar:
 
     # ── DEBUG TURSO (rimuovere dopo verifica) ─────────────────────────────
     st.markdown("<hr class='sb-divider'>", unsafe_allow_html=True)
-    _url = st.secrets.get("TURSO_URL") or os.environ.get("TURSO_URL")
+    _url_raw = st.secrets.get("TURSO_URL") or os.environ.get("TURSO_URL")
     _tok = st.secrets.get("TURSO_TOKEN") or os.environ.get("TURSO_TOKEN")
-    st.markdown(
-        f"<div style='font-family:Courier New,monospace;font-size:8px;color:#8b949e;padding:4px'>"
-        f"URL: {'✅' if _url else '❌'} TOKEN: {'✅' if _tok else '❌'}<br>"
-        f"schema: {_url.split('://')[0] if _url else '—'}</div>",
-        unsafe_allow_html=True
-    )
+    _url_used = st.session_state.get("_turso_url_used", "—")
     _err = st.session_state.get("_turso_error", "non ancora caricato")
-    _color = "#2ecc71" if _err is None else "#e74c3c"
+    _color = "#2ecc71" if _err is None else ("#e6c343" if _err == "non ancora caricato" else "#e74c3c")
     _msg = "OK — dati da DB" if _err is None else str(_err)
     st.markdown(
-        f"<div style='font-family:Courier New,monospace;font-size:8px;color:{_color};padding:4px'>"
-        f"{_msg}</div>",
+        f"<div style='font-family:Courier New,monospace;font-size:8px;color:#8b949e;padding:4px;word-break:break-all'>"
+        f"URL secret: {'✅' if _url_raw else '❌'}<br>"
+        f"TOKEN: {'✅' if _tok else '❌'}<br>"
+        f"URL usato: {_url_used}<br>"
+        f"<span style='color:{_color}'>{_msg}</span>"
+        f"</div>",
         unsafe_allow_html=True
     )
     # ── FINE DEBUG ────────────────────────────────────────────────────────
