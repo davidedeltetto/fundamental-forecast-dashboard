@@ -460,7 +460,6 @@ def find_latest_file(zone: str) -> str | None:
     return files[0] if files else None
 
 
-@st.cache_data(ttl=120, show_spinner=False)
 def load_zone_data(zone: str) -> dict:
     # 1) Prova DB SQLite
     db_data = _load_from_db("load", zone)
@@ -539,7 +538,6 @@ def load_zone_data(zone: str) -> dict:
     return dict(hist=hist_df, fore=fore_df, filename="[SIMULATO]", is_dummy=True)
 
 
-@st.cache_data(ttl=120, show_spinner=False)
 def get_gw_labels() -> dict:
     out = {}
     for z in ZONE_ORDER + ["ITALY"]:
@@ -550,7 +548,6 @@ def get_gw_labels() -> dict:
 
 
 # ── DATA LAYER – PV CAPACITY (CSV TERNA) ──────────────────────────────────────
-@st.cache_data(ttl=120, show_spinner=False)
 def load_pv_capacity() -> dict:
     csv_path = os.path.join(BASE_DIR, "capacity_zona_mensile.csv")
     if not os.path.exists(csv_path):
@@ -590,7 +587,6 @@ def find_latest_pv_file(zone: str) -> str | None:
     return files[0] if files else None
 
 
-@st.cache_data(ttl=120, show_spinner=False)
 def load_pv_data(zone: str) -> dict:
     # 1) Prova DB SQLite
     db_data = _load_from_db("pv", zone)
@@ -713,7 +709,6 @@ def load_pv_data(zone: str) -> dict:
     return dict(hist=hist_df, fore=fore_df, filename="[SIMULATO]", is_dummy=True)
 
 
-@st.cache_data(ttl=120, show_spinner=False)
 def get_pv_labels() -> dict:
     out = {}
     for z in ZONE_ORDER + ["ITALY"]:
