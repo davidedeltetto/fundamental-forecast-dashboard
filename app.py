@@ -62,7 +62,6 @@ def _load_from_db(model: str, zone: str) -> dict | None:
     if client is None:
         return None
 
-    # Mappatura automatica nome zona per la query Italia
     target_zone = zone.upper()
     if target_zone in ["ITALY", "ITA", "IT"]:
         target_zone = "ITA" if model == "load" else "ITALY"
@@ -210,10 +209,10 @@ st.markdown("""
     margin-bottom: 10px;
 }
 
-/* KPI grid */
+/* KPI grid - Aggiornata a 3 colonne */
 .t-kpi-container {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 8px;
     margin-bottom: 8px;
 }
@@ -1290,11 +1289,6 @@ def render_load_dashboard():
         p_max = fore["predicted_load"].max()
         p_min = fore["predicted_load"].min()
         p_avg = fore["predicted_load"].mean()
-        last_actual = hist["actual_load"].dropna().iloc[-1] if not hist.empty else None
-        first_fore = fore["predicted_load"].iloc[0]
-        delta = (last_actual - first_fore) if last_actual is not None else 0.0
-        d_cl = "pos" if delta >= 0 else "neg"
-        d_s = f"{'+' if delta >= 0 else ''}{delta:.2f}"
         interval_str = (f"±{(fore['upper_bound'] - fore['lower_bound']).mean() / 2:.2f}"
                         if "upper_bound" in fore.columns else "—")
 
@@ -1311,10 +1305,6 @@ def render_load_dashboard():
           <div class="t-kpi-card">
             <div class="t-kpi-label">AVG FORECAST (GW)</div>
             <div class="t-kpi-value" style="color:{zc}">{p_avg:.1f}</div>
-          </div>
-          <div class="t-kpi-card">
-            <div class="t-kpi-label">ACTUAL vs FORECAST</div>
-            <div class="t-kpi-value"><span class="{d_cl}">{d_s}</span><span style="font-size:11px;color:#8b949e"> GW</span></div>
           </div>
         </div>""", unsafe_allow_html=True)
 
@@ -1494,11 +1484,6 @@ def render_pv_dashboard():
         p_peak = fore["predicted_pv"].max()
         p_avg = fore["predicted_pv"].mean()
         e_tot = fore["predicted_pv"].sum() * 0.25
-        last_actual_pv = hist["actual_pv"].dropna().iloc[-1] if not hist.empty else None
-        first_fore_pv = fore["predicted_pv"].iloc[0]
-        delta_pv = (last_actual_pv - first_fore_pv) if last_actual_pv is not None else 0.0
-        d_cl_pv = "pos" if delta_pv >= 0 else "neg"
-        d_s_pv = f"{'+' if delta_pv >= 0 else ''}{delta_pv:.3f}"
 
         st.markdown(f"""
         <div class="t-kpi-container">
@@ -1513,10 +1498,6 @@ def render_pv_dashboard():
           <div class="t-kpi-card">
             <div class="t-kpi-label">ENERGIA TOTALE (GWh)</div>
             <div class="t-kpi-value" style="color:{zc}">{e_tot:.1f}</div>
-          </div>
-          <div class="t-kpi-card">
-            <div class="t-kpi-label">ACTUAL vs FORECAST</div>
-            <div class="t-kpi-value"><span class="{d_cl_pv}">{d_s_pv}</span><span style="font-size:11px;color:#8b949e"> GW</span></div>
           </div>
         </div>""", unsafe_allow_html=True)
 
