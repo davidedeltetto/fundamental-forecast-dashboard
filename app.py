@@ -6,15 +6,25 @@ import plotly.graph_objects as go
 
 # ── PAGE CONFIG ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="⚡ Electricity Forecast Platform",
+    page_title="Electricity Forecast Platform",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 st.markdown(
     """
     <style>
+    /* Forza il wrap su tutti i livelli del segmented control */
     div[data-testid="stSegmentedControl"] {
+        width: 100% !important;
+    }
+    div[data-testid="stSegmentedControl"] > div {
         flex-wrap: wrap !important;
+        white-space: normal !important;
+    }
+    div[data-testid="stSegmentedControl"] button {
+        white-space: normal !important;
+        word-break: break-word !important;
     }
     </style>
     """,
