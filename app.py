@@ -4,26 +4,6 @@ import numpy as np
 import os, glob
 import plotly.graph_objects as go
 
-# DEBUG TEMPORANEO — rimuovere dopo
-with st.sidebar:
-    st.markdown("---")
-    url = st.secrets.get("TURSO_URL") or os.environ.get("TURSO_URL")
-    token = st.secrets.get("TURSO_TOKEN") or os.environ.get("TURSO_TOKEN")
-    st.write("URL presente:", bool(url))
-    st.write("TOKEN presente:", bool(token))
-    if url:
-        st.write("URL schema:", url.split("://")[0])
-    try:
-        client = _get_turso_client()
-        if client:
-            res = client.execute("SELECT COUNT(*) FROM forecast_runs")
-            st.write("Runs nel DB:", res.rows[0][0])
-            client.close()
-        else:
-            st.write("❌ client è None")
-    except Exception as e:
-        st.write("❌ Errore:", str(e))
-
 # ── PAGE CONFIG ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="TERNA | OPERATIVE FORECAST PLATFORM",
@@ -50,6 +30,113 @@ PV_ZONE_COLORS = ZONE_COLORS
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
+
+
+# ── DATA LAYER – TURSO ────────────────────────────────────────────────────────
+# Definito qui (prima della sidebar e delle cache functions) per evitare
+# NameError quando viene richiamato da load_zone_data / load_pv_data.
+
+def _get_turso_client():
+    """Client Turso sincrono. Ritorna None se le credenziali non sono configurate."""
+    try:
+        import libsql_client
+        url   = st.secrets.get("TURSO_URL")   or os.environ.get("TURSO_URL")
+        token = st.secrets.get("TURSO_TOKEN") or os.environ.get("TURSO_TOKEN")
+        if not url or not token:
+            return None
+        # Forza HTTP (Hrana su https://) invece di WebSocket (libsql:// / wss://).
+        if url.startswith("libsql://"):
+            url = "https://" + url[len("libsql://"):]
+        elif url.startswith("wss://"):
+            url = "https://" + url[len("wss://"):]
+        return libsql_client.create_client_sync(url=url, auth_token=token)
+    except Exception as e:
+        st.session_state["_turso_error"] = f"get_client: {e}"
+        return None
+
+
+def _load_from_db(model: str, zone: str) -> dict | None:
+    """
+    Legge da Turso l'ultimo run disponibile per model x zone.
+    Ritorna None se le credenziali mancano o la zona non ha dati.
+    """
+    client = _get_turso_client()
+    if client is None:
+        return None
+
+    try:
+        res = client.execute(
+            "SELECT id, source_file FROM forecast_runs "
+            "WHERE model = ? AND zone = ? ORDER BY created_at DESC LIMIT 1",
+            [model, zone.upper()],
+        )
+        if not res.rows:
+            st.session_state["_turso_error"] = f"Nessun run per model={model} zone={zone}"
+            return None
+
+        run_id      = res.rows[0][0]
+        source_file = res.rows[0][1] or ""
+
+        res2 = client.execute(
+            """SELECT section, ts AS datetime,
+                actual_gw, predicted_gw, lower_bound, upper_bound,
+                weather_temperature_2m, weather_apparent_temperature,
+                weather_prev_year_temperature, weather_relative_humidity_2m,
+                weather_wind_speed_10m, weather_wind_direction_10m,
+                weather_direct_radiation, weather_shortwave_radiation,
+                weather_direct_normal_irradiance, weather_diffuse_radiation,
+                weather_cloud_cover, weather_cloud_cover_low,
+                weather_cloud_cover_mid, weather_cloud_cover_high,
+                weather_precipitation, weather_snowfall, weather_snow_depth,
+                extra
+               FROM forecast_records WHERE run_id = ? ORDER BY datetime""",
+            [run_id],
+        )
+
+        if not res2.rows:
+            st.session_state["_turso_error"] = f"run_id={run_id} esiste ma 0 record"
+            return None
+
+        cols = [c.name for c in res2.columns]
+        df   = pd.DataFrame([dict(zip(cols, row)) for row in res2.rows])
+
+        if df.empty:
+            return None
+
+        df["datetime"] = pd.to_datetime(df["datetime"], utc=True, errors="coerce")
+        df["datetime"] = df["datetime"].dt.tz_localize(None)
+
+        import json as _json
+        extra_rows = []
+        for raw in df["extra"]:
+            try:
+                extra_rows.append(_json.loads(raw) if raw else {})
+            except Exception:
+                extra_rows.append({})
+        if any(extra_rows):
+            extra_df = pd.DataFrame(extra_rows, index=df.index)
+            df = pd.concat([df.drop(columns=["extra"]), extra_df], axis=1)
+        else:
+            df = df.drop(columns=["extra"])
+
+        hist = df[df["section"] == "historical"].copy().reset_index(drop=True)
+        fore = df[df["section"] == "forecast"].copy().reset_index(drop=True)
+
+        st.session_state["_turso_error"] = None  # successo
+        return dict(
+            hist=hist,
+            fore=fore,
+            filename=os.path.basename(source_file),
+            is_dummy=False,
+            from_db=True,
+        )
+
+    except Exception as e:
+        st.session_state["_turso_error"] = f"query: {e}"
+        return None
+    finally:
+        client.close()
+
 
 # ── CSS ──────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -338,109 +425,25 @@ with st.sidebar:
         unsafe_allow_html=True
     )
 
-
-# ── DATA LAYER – TURSO ────────────────────────────────────────────────────────
-
-def _get_turso_client():
-    """Client Turso sincrono. Ritorna None se le credenziali non sono configurate."""
-    try:
-        import libsql_client
-        url   = st.secrets.get("TURSO_URL")   or os.environ.get("TURSO_URL")
-        token = st.secrets.get("TURSO_TOKEN") or os.environ.get("TURSO_TOKEN")
-        if not url or not token:
-            return None
-        # Forza HTTP (Hrana su https://) invece di WebSocket (libsql:// / wss://).
-        # Il protocollo WebSocket è soggetto a WSServerHandshakeError (400)
-        # dietro alcune reti/proxy — stessa fix applicata in db/writer.py.
-        if url.startswith("libsql://"):
-            url = "https://" + url[len("libsql://"):]
-        elif url.startswith("wss://"):
-            url = "https://" + url[len("wss://"):]
-        return libsql_client.create_client_sync(url=url, auth_token=token)
-    except Exception:
-        return None
-
-
-def _load_from_db(model: str, zone: str) -> dict | None:
-    """
-    Legge da Turso l'ultimo run disponibile per model×zone.
-    Ritorna None se le credenziali mancano o la zona non ha dati.
-    """
-    client = _get_turso_client()
-    if client is None:
-        return None
-
-    try:
-        # Recupera l'ultimo run per questa zona/modello
-        res = client.execute(
-            "SELECT id, source_file FROM forecast_runs "
-            "WHERE model = ? AND zone = ? ORDER BY created_at DESC LIMIT 1",
-            [model, zone.upper()],
-        )
-        if not res.rows:
-            return None
-
-        run_id      = res.rows[0][0]
-        source_file = res.rows[0][1] or ""
-
-        # Legge tutti i record di quel run
-        res2 = client.execute(
-            """SELECT section, ts AS datetime,
-                actual_gw, predicted_gw, lower_bound, upper_bound,
-                weather_temperature_2m, weather_apparent_temperature,
-                weather_prev_year_temperature, weather_relative_humidity_2m,
-                weather_wind_speed_10m, weather_wind_direction_10m,
-                weather_direct_radiation, weather_shortwave_radiation,
-                weather_direct_normal_irradiance, weather_diffuse_radiation,
-                weather_cloud_cover, weather_cloud_cover_low,
-                weather_cloud_cover_mid, weather_cloud_cover_high,
-                weather_precipitation, weather_snowfall, weather_snow_depth,
-                extra
-               FROM forecast_records WHERE run_id = ? ORDER BY datetime""",
-            [run_id],
-        )
-
-        if not res2.rows:
-            return None
-
-        cols = [c.name for c in res2.columns]
-        df   = pd.DataFrame([dict(zip(cols, row)) for row in res2.rows])
-
-        if df.empty:
-            return None
-
-        df["datetime"] = pd.to_datetime(df["datetime"], utc=True, errors="coerce")
-        df["datetime"] = df["datetime"].dt.tz_localize(None)
-
-        # Espande la colonna extra (JSON) → colonne separate
-        import json as _json
-        extra_rows = []
-        for raw in df["extra"]:
-            try:
-                extra_rows.append(_json.loads(raw) if raw else {})
-            except Exception:
-                extra_rows.append({})
-        if any(extra_rows):
-            extra_df = pd.DataFrame(extra_rows, index=df.index)
-            df = pd.concat([df.drop(columns=["extra"]), extra_df], axis=1)
-        else:
-            df = df.drop(columns=["extra"])
-
-        hist = df[df["section"] == "historical"].copy().reset_index(drop=True)
-        fore = df[df["section"] == "forecast"].copy().reset_index(drop=True)
-
-        return dict(
-            hist=hist,
-            fore=fore,
-            filename=os.path.basename(source_file),
-            is_dummy=False,
-            from_db=True,
-        )
-
-    except Exception:
-        return None
-    finally:
-        client.close()
+    # ── DEBUG TURSO (rimuovere dopo verifica) ─────────────────────────────
+    st.markdown("<hr class='sb-divider'>", unsafe_allow_html=True)
+    _url = st.secrets.get("TURSO_URL") or os.environ.get("TURSO_URL")
+    _tok = st.secrets.get("TURSO_TOKEN") or os.environ.get("TURSO_TOKEN")
+    st.markdown(
+        f"<div style='font-family:Courier New,monospace;font-size:8px;color:#8b949e;padding:4px'>"
+        f"URL: {'✅' if _url else '❌'} TOKEN: {'✅' if _tok else '❌'}<br>"
+        f"schema: {_url.split('://')[0] if _url else '—'}</div>",
+        unsafe_allow_html=True
+    )
+    _err = st.session_state.get("_turso_error", "non ancora caricato")
+    _color = "#2ecc71" if _err is None else "#e74c3c"
+    _msg = "OK — dati da DB" if _err is None else str(_err)
+    st.markdown(
+        f"<div style='font-family:Courier New,monospace;font-size:8px;color:{_color};padding:4px'>"
+        f"{_msg}</div>",
+        unsafe_allow_html=True
+    )
+    # ── FINE DEBUG ────────────────────────────────────────────────────────
 
 
 # ── DATA LAYER – LOAD (CSV fallback) ─────────────────────────────────────────
