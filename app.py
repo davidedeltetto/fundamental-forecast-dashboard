@@ -26,7 +26,6 @@ ZONE_COLORS = {
     "ITALY": "#ffffff",
 }
 
-# PV chart usa gli stessi colori per coerenza
 PV_ZONE_COLORS = ZONE_COLORS
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -34,9 +33,6 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 
 
 # ── DATA LAYER – TURSO ────────────────────────────────────────────────────────
-# Definito qui (prima della sidebar e delle cache functions) per evitare
-# NameError quando viene richiamato da load_zone_data / load_pv_data.
-
 def _get_turso_client():
     """Client Turso sincrono. Ritorna None se le credenziali non sono configurate."""
     import libsql_client
@@ -66,14 +62,19 @@ def _load_from_db(model: str, zone: str) -> dict | None:
     if client is None:
         return None
 
+    # Mappatura automatica nome zona per la query Italia
+    target_zone = zone.upper()
+    if target_zone in ["ITALY", "ITA", "IT"]:
+        target_zone = "ITA" if model == "load" else "ITALY"
+
     try:
         res = client.execute(
             "SELECT id, source_file FROM forecast_runs "
             "WHERE model = ? AND zone = ? ORDER BY created_at DESC LIMIT 1",
-            [model, zone.upper()],
+            [model, target_zone],
         )
         if not res.rows:
-            st.session_state["_turso_error"] = f"Nessun run per model={model} zone={zone}"
+            st.session_state["_turso_error"] = f"Nessun run per model={model} zone={target_zone}"
             return None
 
         run_id      = res.rows[0][0]
@@ -124,7 +125,7 @@ def _load_from_db(model: str, zone: str) -> dict | None:
         hist = df[df["section"] == "historical"].copy().reset_index(drop=True)
         fore = df[df["section"] == "forecast"].copy().reset_index(drop=True)
 
-        st.session_state["_turso_error"] = None  # successo
+        st.session_state["_turso_error"] = None
         return dict(
             hist=hist,
             fore=fore,
@@ -159,40 +160,6 @@ st.markdown("""
     padding: 0 !important;
 }
 
-/* Sidebar Nav Buttons */
-.sb-nav-btn {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    padding: 20px 8px 16px;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    border-left: 3px solid transparent;
-    transition: all 0.15s;
-    gap: 6px;
-}
-.sb-nav-btn:hover { background: #161b22; }
-.sb-nav-btn.active {
-    background: #10161d;
-    border-left-color: #7be2ff;
-}
-.sb-nav-btn.active-pv {
-    background: #10161d;
-    border-left-color: #ffd700;
-}
-.sb-icon { font-size: 28px; line-height: 1; }
-.sb-label {
-    font-family: 'Courier New', monospace;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: .10em;
-    color: #8b949e;
-}
-.sb-label.active   { color: #7be2ff; }
-.sb-label.active-pv { color: #ffd700; }
 .sb-divider {
     border: none;
     border-top: 1px solid #21262d;
@@ -385,7 +352,7 @@ button[title="View fullscreen"] { display: none !important; }
 
 # ── SESSION STATE ─────────────────────────────────────────────────────────────
 if "dashboard_mode" not in st.session_state:
-    st.session_state.dashboard_mode = "LOAD"  # "LOAD" | "PV"
+    st.session_state.dashboard_mode = "LOAD"
 if "selected_zone" not in st.session_state:
     st.session_state.selected_zone = "NORD"
 if "timeframe" not in st.session_state:
@@ -431,7 +398,7 @@ with st.sidebar:
         unsafe_allow_html=True
     )
 
-    # ── DEBUG TURSO (rimuovere dopo verifica) ─────────────────────────────
+    # Status Turso DB
     st.markdown("<hr class='sb-divider'>", unsafe_allow_html=True)
     _url_raw = st.secrets.get("TURSO_URL") or os.environ.get("TURSO_URL")
     _tok = st.secrets.get("TURSO_TOKEN") or os.environ.get("TURSO_TOKEN")
@@ -448,10 +415,9 @@ with st.sidebar:
         f"</div>",
         unsafe_allow_html=True
     )
-    # ── FINE DEBUG ────────────────────────────────────────────────────────
 
 
-# ── DATA LAYER – LOAD (CSV fallback) ─────────────────────────────────────────
+# ── DATA LAYER – LOAD ─────────────────────────────────────────────────────────
 def _candidate_data_dirs() -> list[str]:
     dirs = [DATA_DIR, BASE_DIR]
     return list(dict.fromkeys(d for d in dirs if os.path.isdir(d)))
@@ -467,7 +433,7 @@ def find_latest_file(zone: str) -> str | None:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_zone_data(zone: str) -> dict:
-    # 1) Prova DB SQLite
+    # 1) Prova DB Turso
     db_data = _load_from_db("load", zone)
     if db_data is not None:
         hist = db_data["hist"].rename(columns={
@@ -492,7 +458,6 @@ def load_zone_data(zone: str) -> dict:
             "weather_cloud_cover":            "cloud_cover (%)",
             "weather_prev_year_temperature":  "Prev_Year_Temp (°C)",
         })
-        # Day_Type può stare in extra → viene già espansa come colonna
         if "Day_Type" in fore.columns and "day_type" not in fore.columns:
             fore = fore.rename(columns={"Day_Type": "day_type"})
         return dict(hist=hist, fore=fore,
@@ -514,6 +479,7 @@ def load_zone_data(zone: str) -> dict:
         fore = fore.sort_values("datetime").reset_index(drop=True)
         return dict(hist=hist, fore=fore, filename=os.path.basename(path), is_dummy=False)
 
+    # Fallback simulato
     rng = np.random.default_rng(seed=abs(hash(zone)) % 2 ** 32)
     base = {"NORD": 23, "CNOR": 13, "CSUD": 12, "SUD": 13, "CALA": 4, "SICI": 5, "SARD": 3, "ITALY": 78}.get(zone, 12.0)
     dates_h = pd.date_range("2026-06-27", periods=672, freq="15min")
@@ -544,17 +510,7 @@ def load_zone_data(zone: str) -> dict:
     return dict(hist=hist_df, fore=fore_df, filename="[SIMULATO]", is_dummy=True)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def get_gw_labels() -> dict:
-    out = {}
-    for z in ZONE_ORDER + ["ITALY"]:
-        d = load_zone_data(z)
-        val = d["fore"]["predicted_load"].mean()
-        out[z] = f"{val:.1f} GW"
-    return out
-
-
-# ── DATA LAYER – PV CAPACITY (CSV TERNA) ──────────────────────────────────────
+# ── DATA LAYER – PV ───────────────────────────────────────────────────────────
 def load_pv_capacity() -> dict:
     csv_path = os.path.join(BASE_DIR, "capacity_zona_mensile.csv")
     if not os.path.exists(csv_path):
@@ -579,7 +535,6 @@ def load_pv_capacity() -> dict:
         except Exception:
             pass
 
-    # Fallback se il CSV non è presente
     return {
         "NORD": 22.0, "CNOR": 3.6, "CSUD": 8.4, "SUD": 5.3,
         "CALA": 1.0, "SICI": 4.1, "SARD": 2.1, "ITALY": 46.6,
@@ -596,7 +551,7 @@ def find_latest_pv_file(zone: str) -> str | None:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_pv_data(zone: str) -> dict:
-    # 1) Prova DB SQLite
+    # 1) Prova DB Turso
     db_data = _load_from_db("pv", zone)
     if db_data is not None:
         hist = db_data["hist"].rename(columns={
@@ -646,27 +601,14 @@ def load_pv_data(zone: str) -> dict:
     path = find_latest_pv_file(zone)
     if path:
         raw = pd.read_csv(path)
-        required = {"section", "date"}
-        missing = required - set(raw.columns)
-        if missing:
-            raise ValueError(
-                f"CSV PV {os.path.basename(path)} non valido: colonne mancanti {sorted(missing)}"
-            )
-
         raw["date"] = pd.to_datetime(raw["date"], errors="coerce")
         raw = raw.dropna(subset=["date"]).copy()
 
         hist = raw[raw["section"].eq("historical")].copy()
         fore = raw[raw["section"].eq("forecast")].copy()
 
-        hist = hist.rename(columns={
-            "PV_Production (GW)": "actual_pv",
-            "date": "datetime",
-        })
-        fore = fore.rename(columns={
-            "Predicted_PV (GW)": "predicted_pv",
-            "date": "datetime",
-        })
+        hist = hist.rename(columns={"PV_Production (GW)": "actual_pv", "date": "datetime"})
+        fore = fore.rename(columns={"Predicted_PV (GW)": "predicted_pv", "date": "datetime"})
 
         for df, col in ((hist, "actual_pv"), (fore, "predicted_pv"),
                         (fore, "lower_bound"), (fore, "upper_bound")):
@@ -676,21 +618,12 @@ def load_pv_data(zone: str) -> dict:
         hist = hist.sort_values("datetime").reset_index(drop=True)
         fore = fore.sort_values("datetime").reset_index(drop=True)
 
-        if "predicted_pv" not in fore.columns:
-            raise ValueError(
-                f"CSV PV {os.path.basename(path)} non contiene 'Predicted_PV (GW)'."
-            )
         if "actual_pv" not in hist.columns:
             hist["actual_pv"] = np.nan
 
-        return dict(
-            hist=hist,
-            fore=fore,
-            filename=os.path.basename(path),
-            is_dummy=False,
-        )
+        return dict(hist=hist, fore=fore, filename=os.path.basename(path), is_dummy=False)
 
-    # Dati simulati fallback
+    # Fallback simulato
     rng = np.random.default_rng(seed=abs(hash(zone)) % 2 ** 32)
     cap_dict = load_pv_capacity()
     cap = cap_dict.get(zone, 10.0)
@@ -715,15 +648,6 @@ def load_pv_data(zone: str) -> dict:
         "day_type": ["festivo" if d.weekday() >= 5 else "feriale" for d in dates_f],
     })
     return dict(hist=hist_df, fore=fore_df, filename="[SIMULATO]", is_dummy=True)
-
-
-def get_pv_labels() -> dict:
-    out = {}
-    for z in ZONE_ORDER + ["ITALY"]:
-        d = load_pv_data(z)
-        val = d["fore"]["predicted_pv"].max()
-        out[z] = f"{val:.1f} GW"
-    return out
 
 
 # ── OVERLAY OPTIONS ───────────────────────────────────────────────────────────
@@ -770,7 +694,6 @@ def build_chart(
     if prev_year_vars is None:
         prev_year_vars = []
 
-    # Recupera il colore dal dizionario ZONE_COLORS
     zc = ZONE_COLORS.get(zone, "#7be2ff")
 
     if zone == "ITALY":
@@ -1031,7 +954,6 @@ def build_chart(
 def build_pv_chart(
     data: dict, zone: str, timeframe: str, meteo_var: str = None
 ) -> go.Figure:
-    # Usa rigorosamente ZONE_COLORS
     zc = ZONE_COLORS.get(zone, "#7be2ff")
 
     if zone == "ITALY":
@@ -1253,6 +1175,7 @@ def build_pv_chart(
         ),
     )
     return fig
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  DASHBOARD – LOAD
