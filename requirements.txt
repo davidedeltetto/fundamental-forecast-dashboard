@@ -13,5 +13,5 @@ entsoe-py
 libsql-client
 
 # Dashboard (solo per Streamlit Cloud, ignorato dal workflow)
-streamlit
+streamlit==1.55.0
 plotly
