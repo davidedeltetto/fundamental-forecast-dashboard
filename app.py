@@ -359,6 +359,10 @@ div[data-testid="stSegmentedControl"] {
     border-radius: 4px !important;
     gap: 2px !important;
     padding: 2px !important;
+    flex-wrap: wrap !important;
+}
+div[data-testid="stSegmentedControl"] > div {
+    flex-wrap: wrap !important;
 }
 div[data-testid="stSegmentedControl"] label {
     font-family: 'Courier New', monospace !important;
