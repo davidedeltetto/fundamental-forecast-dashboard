@@ -98,7 +98,7 @@ def _load_from_db(model: str, zone: str) -> dict | None:
             st.session_state["_turso_error"] = f"run_id={run_id} esiste ma 0 record"
             return None
 
-        cols = [c.name for c in res2.columns]
+        cols = [c.name if hasattr(c, "name") else c for c in res2.columns]
         df   = pd.DataFrame([dict(zip(cols, row)) for row in res2.rows])
 
         if df.empty:
@@ -460,6 +460,7 @@ def find_latest_file(zone: str) -> str | None:
     return files[0] if files else None
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def load_zone_data(zone: str) -> dict:
     # 1) Prova DB SQLite
     db_data = _load_from_db("load", zone)
@@ -538,6 +539,7 @@ def load_zone_data(zone: str) -> dict:
     return dict(hist=hist_df, fore=fore_df, filename="[SIMULATO]", is_dummy=True)
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def get_gw_labels() -> dict:
     out = {}
     for z in ZONE_ORDER + ["ITALY"]:
@@ -587,6 +589,7 @@ def find_latest_pv_file(zone: str) -> str | None:
     return files[0] if files else None
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def load_pv_data(zone: str) -> dict:
     # 1) Prova DB SQLite
     db_data = _load_from_db("pv", zone)
@@ -1275,9 +1278,10 @@ def render_load_dashboard():
             key="zone_toggle",
             label_visibility="collapsed",
         )
-        if chosen_zone is not None:
+        if chosen_zone is not None and chosen_zone != st.session_state.selected_zone:
             st.session_state.selected_zone = chosen_zone
-        else:
+            st.rerun()
+        elif chosen_zone is None:
             st.session_state.selected_zone = "ITALY"
 
         st.write("---")
@@ -1478,9 +1482,10 @@ def render_pv_dashboard():
             key="pv_zone_toggle",
             label_visibility="collapsed",
         )
-        if chosen_zone is not None:
+        if chosen_zone is not None and chosen_zone != st.session_state.pv_zone:
             st.session_state.pv_zone = chosen_zone
-        else:
+            st.rerun()
+        elif chosen_zone is None:
             st.session_state.pv_zone = "ITALY"
 
         st.write("---")
