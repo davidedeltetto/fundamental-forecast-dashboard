@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 
 # ── PAGE CONFIG ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="TERNA | OPERATIVE FORECAST PLATFORM",
+    page_title="⚡ Electricity Forecast Platform",
     layout="wide",
     initial_sidebar_state="expanded",
 )
