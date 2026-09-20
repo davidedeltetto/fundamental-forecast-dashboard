@@ -11,25 +11,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-st.markdown(
-    """
-    <style>
-    /* Forza il wrap su tutti i livelli del segmented control */
-    div[data-testid="stSegmentedControl"] {
-        width: 100% !important;
-    }
-    div[data-testid="stSegmentedControl"] > div {
-        flex-wrap: wrap !important;
-        white-space: normal !important;
-    }
-    div[data-testid="stSegmentedControl"] button {
-        white-space: normal !important;
-        word-break: break-word !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
 
 # ── CONFIG / COSTANTI ─────────────────────────────────────────────────────────
 ZONE_ORDER = ["NORD", "CNOR", "CSUD", "SUD", "CALA", "SICI", "SARD"]
