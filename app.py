@@ -4,6 +4,26 @@ import numpy as np
 import os, glob
 import plotly.graph_objects as go
 
+# DEBUG TEMPORANEO — rimuovere dopo
+with st.sidebar:
+    st.markdown("---")
+    url = st.secrets.get("TURSO_URL") or os.environ.get("TURSO_URL")
+    token = st.secrets.get("TURSO_TOKEN") or os.environ.get("TURSO_TOKEN")
+    st.write("URL presente:", bool(url))
+    st.write("TOKEN presente:", bool(token))
+    if url:
+        st.write("URL schema:", url.split("://")[0])
+    try:
+        client = _get_turso_client()
+        if client:
+            res = client.execute("SELECT COUNT(*) FROM forecast_runs")
+            st.write("Runs nel DB:", res.rows[0][0])
+            client.close()
+        else:
+            st.write("❌ client è None")
+    except Exception as e:
+        st.write("❌ Errore:", str(e))
+
 # ── PAGE CONFIG ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="TERNA | OPERATIVE FORECAST PLATFORM",
