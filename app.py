@@ -329,6 +329,13 @@ def _get_turso_client():
         token = st.secrets.get("TURSO_TOKEN") or os.environ.get("TURSO_TOKEN")
         if not url or not token:
             return None
+        # Forza HTTP (Hrana su https://) invece di WebSocket (libsql:// / wss://).
+        # Il protocollo WebSocket è soggetto a WSServerHandshakeError (400)
+        # dietro alcune reti/proxy — stessa fix applicata in db/writer.py.
+        if url.startswith("libsql://"):
+            url = "https://" + url[len("libsql://"):]
+        elif url.startswith("wss://"):
+            url = "https://" + url[len("wss://"):]
         return libsql_client.create_client_sync(url=url, auth_token=token)
     except Exception:
         return None
