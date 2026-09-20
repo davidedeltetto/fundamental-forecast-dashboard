@@ -10,6 +10,16 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+st.markdown(
+    """
+    <style>
+    div[data-testid="stSegmentedControl"] {
+        flex-wrap: wrap !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ── CONFIG / COSTANTI ─────────────────────────────────────────────────────────
 ZONE_ORDER = ["NORD", "CNOR", "CSUD", "SUD", "CALA", "SICI", "SARD"]
