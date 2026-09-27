@@ -445,14 +445,14 @@ def load_comparison_data(model: str, zone: str, lookback_days: int = 21) -> dict
                 rmse = np.sqrt((err ** 2).mean())
                 max_err = err.abs().max()
                 bias = err.mean()
-                nz = sub["Actual"].replace(0, np.nan)
-                mape = (err.abs() / nz).dropna()
-                mape_pct = mape.mean() * 100 if not mape.empty else np.nan
+                # WMAPE: sum(|err|) / sum(actual) — robusto con valori vicini a zero
+                actual_sum = sub["Actual"].sum()
+                wmape_pct = (err.abs().sum() / actual_sum * 100) if actual_sum > 0 else np.nan
                 metric_rows.append({
                     "Lead Time": f"D-{int(lead)} ({int(lead)*24}h prima)",
                     "lead_days": int(lead),
                     "MAE (MW)": round(mae * 1000, 0),
-                    "MAPE (%)": round(mape_pct, 1) if pd.notna(mape_pct) else np.nan,
+                    "WMAPE (%)": round(wmape_pct, 1) if pd.notna(wmape_pct) else np.nan,
                     "RMSE (MW)": round(rmse * 1000, 0),
                     "Max Error (MW)": round(max_err * 1000, 0),
                     "Bias (MW)": round(bias * 1000, 0),
@@ -1973,39 +1973,65 @@ def build_comparison_chart(merged: pd.DataFrame, leadtimes: list[int], unit: str
 
 
 def build_error_by_hour_chart(merged: pd.DataFrame, leadtimes: list[int]) -> go.Figure:
+    """Grafico MAE medio per ora del giorno.
+
+    Usa MAE (non MAPE) per evitare l'esplosione nelle ore con produzione
+    vicina a zero (notte/alba/tramonto). Le ore in cui il picco giornaliero
+    locale è sotto la soglia NIGHT_THRESHOLD_FRAC vengono escluse dal calcolo
+    e mostrate come barre trasparenti, così la scala rimane leggibile.
+    """
     if "Actual" not in merged.columns:
         return go.Figure()
+
+    # Soglia: esclude ore in cui l'actual medio è < 10 % del picco giornaliero
+    NIGHT_THRESHOLD_FRAC = 0.10
 
     rows = []
     for lead in leadtimes:
         col = f"Forecast D-{lead}"
         if col not in merged.columns:
             continue
-        sub = merged[[col, "Actual"]].dropna()
+        sub = merged[[col, "Actual"]].dropna().copy()
         if sub.empty:
             continue
-        nz = sub["Actual"].replace(0, np.nan)
-        mape = (sub[col] - sub["Actual"]).abs() / nz * 100
-        rows.append(pd.DataFrame({"hour": sub.index.hour, "mape": mape.values}))
+        sub["hour"] = sub.index.hour
+        sub["date"] = sub.index.date
+        # picco giornaliero per normalizzare la soglia
+        daily_peak = sub.groupby("date")["Actual"].transform("max")
+        mask = sub["Actual"] >= daily_peak * NIGHT_THRESHOLD_FRAC
+        sub = sub[mask]
+        if sub.empty:
+            continue
+        mae_h = (sub[col] - sub["Actual"]).abs()
+        rows.append(pd.DataFrame({"hour": sub["hour"].values, "mae": mae_h.values}))
 
     if not rows:
         return go.Figure()
 
     all_df = pd.concat(rows, ignore_index=True).dropna()
-    by_hour = all_df.groupby("hour")["mape"].mean().reindex(range(24))
+    by_hour = all_df.groupby("hour")["mae"].mean().reindex(range(24))
+    # ore notturne escluse restano NaN → barre assenti
+    colors = ["#e67e22" if pd.notna(v) else "rgba(0,0,0,0)" for v in by_hour.values]
 
     fig = go.Figure(go.Bar(
-        x=by_hour.index, y=by_hour.values,
-        marker_color="#e67e22",
-        hovertemplate=f"{T('hour_hover_label')} %{{x}}:00<br><b>%{{y:.2f}}%</b><extra></extra>",
+        x=by_hour.index,
+        y=by_hour.fillna(0).values,
+        marker_color=colors,
+        hovertemplate=f"{T('hour_hover_label')} %{{x}}:00<br><b>%{{y:.0f}} MW</b><extra></extra>",
     ))
     fig.update_layout(
         paper_bgcolor="#10161d", plot_bgcolor="#10161d",
         margin=dict(l=40, r=10, t=10, b=30), height=230,
         xaxis=dict(gridcolor="#1e2630", tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace"),
                    dtick=4),
-        yaxis=dict(title=dict(text="MAPE (%)", font=dict(color="#8b949e", size=9, family="Courier New, monospace")),
+        yaxis=dict(title=dict(text="MAE (GW)*", font=dict(color="#8b949e", size=9, family="Courier New, monospace")),
                    gridcolor="#1e2630", tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace")),
+        annotations=[dict(
+            text="* ore notturne/bassa prod. escluse (< 10 % picco giornaliero)",
+            xref="paper", yref="paper", x=0, y=-0.18,
+            showarrow=False, font=dict(color="#555e6b", size=8, family="Courier New, monospace"),
+            align="left",
+        )],
     )
     return fig
 
@@ -2142,7 +2168,7 @@ def render_comparison_dashboard():
         if metrics_view.empty:
             st.caption(T("no_obs_caption"))
         else:
-            show_cols = ["Lead Time", "MAE (MW)", "MAPE (%)", "RMSE (MW)", "Max Error (MW)", "Bias (MW)"]
+            show_cols = ["Lead Time", "MAE (MW)", "WMAPE (%)", "RMSE (MW)", "Max Error (MW)", "Bias (MW)"]
             st.dataframe(
                 metrics_view[show_cols].set_index("Lead Time"),
                 use_container_width=True, height=38 * (len(metrics_view) + 1),
