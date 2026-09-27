@@ -2072,16 +2072,17 @@ def render_comparison_dashboard():
 
     with ctrl_range:
         st.markdown(f"<p class='t-panel-title'>{T('time_horizon_label')}</p>", unsafe_allow_html=True)
+        _min_date = datetime.date(2026, 9, 21)
         if not data["merged"].empty:
             idx = data["merged"].index
-            default_start = idx.min().date()
+            default_start = max(idx.min().date(), _min_date)
             default_end = idx.max().date()
         else:
             default_end = pd.Timestamp.utcnow().date()
-            default_start = default_end - pd.Timedelta(days=7)
+            default_start = max(default_end - pd.Timedelta(days=7), _min_date)
         chosen_range = st.date_input(
             "cmp_range", value=(default_start, default_end),
-            min_value=datetime.date(2026, 9, 21),
+            min_value=_min_date,
             key="cmp_range_input", label_visibility="collapsed")
 
     with ctrl_lead:
