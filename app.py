@@ -1972,6 +1972,37 @@ def build_comparison_chart(merged: pd.DataFrame, leadtimes: list[int], unit: str
     return fig
 
 
+def compute_metrics_from_df(df: pd.DataFrame, leadtimes: list[int]) -> pd.DataFrame:
+    """Ricalcola le metriche di errore su un DataFrame già filtrato."""
+    if df.empty or "Actual" not in df.columns:
+        return pd.DataFrame()
+    rows = []
+    for lead in sorted(leadtimes):
+        col = f"Forecast D-{lead}"
+        if col not in df.columns:
+            continue
+        sub = df[[col, "Actual"]].dropna()
+        if sub.empty:
+            continue
+        err = sub[col] - sub["Actual"]
+        mae = err.abs().mean()
+        rmse = np.sqrt((err ** 2).mean())
+        max_err = err.abs().max()
+        bias = err.mean()
+        actual_sum = sub["Actual"].sum()
+        wmape_pct = (err.abs().sum() / actual_sum * 100) if actual_sum > 0 else np.nan
+        rows.append({
+            "lead_days": int(lead),
+            "MAE (MW)": round(mae * 1000, 0),
+            "WMAPE (%)": round(wmape_pct, 1) if pd.notna(wmape_pct) else np.nan,
+            "RMSE (MW)": round(rmse * 1000, 0),
+            "Max Error (MW)": round(max_err * 1000, 0),
+            "Bias (MW)": round(bias * 1000, 0),
+            "n_oss": len(sub),
+        })
+    return pd.DataFrame(rows)
+
+
 # Metriche disponibili nel grafico per ora del giorno
 HOUR_METRICS = {
     "MAE (GW)":   "mae",
@@ -2217,9 +2248,44 @@ def render_comparison_dashboard():
     )
 
     # ── Metriche di errore ───────────────────────────────────────────────────
-    metrics_view = data["metrics"][data["metrics"]["lead_days"].isin(leadtimes)] if not data["metrics"].empty else pd.DataFrame()
+
+    # Data massima in cui esiste il consuntivo (Actual non NaN)
+    actual_col = merged["Actual"].dropna()
+    last_actual_date = actual_col.index.date.max() if not actual_col.empty else None
+
+    # Selettore scope metriche
+    scope_options = ["Tutto il dataset", "Range selezionato"]
+    metrics_scope = st.segmented_control(
+        label="metrics_scope",
+        options=scope_options,
+        default="Tutto il dataset",
+        selection_mode="single",
+        key="metrics_scope_toggle",
+        label_visibility="collapsed",
+    )
+    metrics_scope = metrics_scope if metrics_scope is not None else "Tutto il dataset"
+
+    # Dataframe su cui calcolare le metriche
+    if metrics_scope == "Range selezionato" and isinstance(chosen_range, tuple) and len(chosen_range) == 2:
+        start_d, end_d = chosen_range
+        # Cappa end_d alla data massima del consuntivo
+        if last_actual_date is not None:
+            end_d = min(end_d, last_actual_date)
+        mask_m = (merged.index.date >= start_d) & (merged.index.date <= end_d)
+        metrics_df = merged.loc[mask_m]
+        metrics_raw = compute_metrics_from_df(metrics_df, leadtimes)
+        scope_label = f"{start_d.strftime('%d/%m/%Y')} → {end_d.strftime('%d/%m/%Y')}"
+    else:
+        metrics_df = merged
+        metrics_raw = data["metrics"]
+        if last_actual_date is not None:
+            first_actual_date = actual_col.index.date.min()
+            scope_label = f"{first_actual_date.strftime('%d/%m/%Y')} → {last_actual_date.strftime('%d/%m/%Y')}"
+        else:
+            scope_label = "tutto il dataset"
+
+    metrics_view = metrics_raw[metrics_raw["lead_days"].isin(leadtimes)].copy() if not metrics_raw.empty else pd.DataFrame()
     if not metrics_view.empty:
-        metrics_view = metrics_view.copy()
         metrics_view["Lead Time"] = metrics_view["lead_days"].apply(
             lambda d: f"D-{int(d)} ({int(d) * 24}{T('hours_before_suffix')})"
         )
@@ -2253,7 +2319,7 @@ def render_comparison_dashboard():
             st.caption("—")
         else:
             st.plotly_chart(
-                build_error_by_hour_chart(merged, leadtimes, metric_key=selected_hour_metric),
+                build_error_by_hour_chart(metrics_df, leadtimes, metric_key=selected_hour_metric),
                 use_container_width=True, config={"displayModeBar": False},
             )
 
@@ -2276,6 +2342,8 @@ def render_comparison_dashboard():
                 build_error_vs_lead_chart(metrics_view, metric_key=selected_lead_metric),
                 use_container_width=True, config={"displayModeBar": False},
             )
+
+    st.caption(f"ℹ️ Metriche calcolate su: {scope_label}. Il range è cappato all'ultima data con consuntivo disponibile.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
