@@ -2067,24 +2067,56 @@ def build_error_by_hour_chart(merged: pd.DataFrame, leadtimes: list[int],
     return fig
 
 
-def build_error_vs_lead_chart(metrics: pd.DataFrame) -> go.Figure:
+# Metriche disponibili nel grafico vs lead time (colonne già presenti in metrics)
+LEAD_METRICS = {
+    "MAE (MW)":         ("MAE (MW)",         "MAE (MW)",    "#e67e22", False),
+    "WMAPE (%)":        ("WMAPE (%)",         "WMAPE (%)",   "#3498db", False),
+    "RMSE (MW)":        ("RMSE (MW)",         "RMSE (MW)",   "#9b59b6", False),
+    "Bias (MW)":        ("Bias (MW)",         "Bias (MW)",   "#8b949e", True),
+    "Max Error (MW)":   ("Max Error (MW)",    "Max (MW)",    "#e74c3c", False),
+}
+
+def build_error_vs_lead_chart(metrics: pd.DataFrame,
+                               metric_key: str = "Bias (MW)") -> go.Figure:
     if metrics.empty:
         return go.Figure()
 
+    col, ylabel, color, zeroline = LEAD_METRICS.get(
+        metric_key, ("Bias (MW)", "Bias (MW)", "#8b949e", True)
+    )
+    if col not in metrics.columns:
+        return go.Figure()
+
+    y_vals = metrics[col]
+    is_pct = "%" in metric_key
+
+    if col == "Bias (MW)":
+        point_colors = ["#e74c3c" if v < 0 else "#e67e22" for v in y_vals]
+    else:
+        point_colors = color
+
+    fmt = ".1f" if is_pct else ".0f"
+    unit = "%" if is_pct else " MW"
+
     fig = go.Figure(go.Scatter(
-        x=metrics["lead_days"], y=metrics["Bias (MW)"],
-        mode="markers", marker=dict(size=10, color="#8b949e"),
-        hovertemplate="D-%{x}<br>Bias: <b>%{y:.0f} MW</b><extra></extra>",
+        x=metrics["lead_days"], y=y_vals,
+        mode="markers", marker=dict(size=10, color=point_colors),
+        hovertemplate=f"D-%{{x}}<br>{metric_key}: <b>%{{y:{fmt}}}{unit}</b><extra></extra>",
     ))
     fig.update_layout(
         paper_bgcolor="#10161d", plot_bgcolor="#10161d",
         margin=dict(l=40, r=10, t=10, b=30), height=230,
-        xaxis=dict(gridcolor="#1e2630", title=dict(text="Lead Time", font=dict(color="#8b949e", size=9, family="Courier New, monospace")),
-                   tickvals=metrics["lead_days"], ticktext=[f"D-{d}" for d in metrics["lead_days"]],
-                   tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace")),
-        yaxis=dict(title=dict(text="Error (MW)", font=dict(color="#8b949e", size=9, family="Courier New, monospace")),
-                   gridcolor="#1e2630", zeroline=True, zerolinecolor="#30363d",
-                   tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace")),
+        xaxis=dict(
+            gridcolor="#1e2630",
+            title=dict(text="Lead Time", font=dict(color="#8b949e", size=9, family="Courier New, monospace")),
+            tickvals=metrics["lead_days"], ticktext=[f"D-{d}" for d in metrics["lead_days"]],
+            tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace"),
+        ),
+        yaxis=dict(
+            title=dict(text=ylabel, font=dict(color="#8b949e", size=9, family="Courier New, monospace")),
+            gridcolor="#1e2630", zeroline=zeroline, zerolinecolor="#30363d",
+            tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace"),
+        ),
     )
     return fig
 
@@ -2226,12 +2258,24 @@ def render_comparison_dashboard():
             )
 
     with col_lead:
-        st.markdown(f"<div class='t-chart-title'>{T('error_vs_lead_title')}</div>", unsafe_allow_html=True)
+        l_title_col, l_sel_col = st.columns([3, 2])
+        with l_title_col:
+            st.markdown(f"<div class='t-chart-title'>{T('error_vs_lead_title')}</div>", unsafe_allow_html=True)
+        with l_sel_col:
+            selected_lead_metric = st.selectbox(
+                "lead_metric_sel",
+                options=list(LEAD_METRICS.keys()),
+                index=list(LEAD_METRICS.keys()).index("Bias (MW)"),
+                key="lead_metric_selector",
+                label_visibility="collapsed",
+            )
         if metrics_view.empty:
             st.caption("—")
         else:
-            st.plotly_chart(build_error_vs_lead_chart(metrics_view),
-                             use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(
+                build_error_vs_lead_chart(metrics_view, metric_key=selected_lead_metric),
+                use_container_width=True, config={"displayModeBar": False},
+            )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
