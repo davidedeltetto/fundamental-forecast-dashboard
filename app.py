@@ -2,11 +2,200 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os, glob
+import datetime
 import plotly.graph_objects as go
+
+# ── I18N ─────────────────────────────────────────────────────────────────────
+if "lang" not in st.session_state:
+    st.session_state.lang = "it"
+
+TR = {
+    "it": {
+        "app_title": "Piattaforma Previsioni Elettriche",
+        "app_brand": "PREVISIONI ENERGIA",
+        "nav_load": "CARICO",
+        "nav_pv": "PV",
+        "nav_comparison": "CONFRONTO",
+        "nav_load_help": "Previsione carico elettrico zonale",
+        "nav_pv_help": "Previsione produzione fotovoltaica zonale",
+        "nav_comparison_help": "Confronto previsione vs reale e analisi accuratezza",
+        "mode_suffix": "MODALITÀ",
+        "err_missing_credentials": "credenziali mancanti",
+        "err_client_creation": "errore creazione client: {e}",
+        "err_no_run": "nessun run per model={model} zone={zone}",
+        "err_zero_records": "run_id={run_id} esiste ma 0 record",
+        "err_query": "errore query: {e}",
+        "err_comparison_query": "errore query confronto: {e}",
+        "quick_selection": "SELEZIONE RAPIDA",
+        "italy_flag_label": "🇮🇹 ITALIA",
+        "timeframe_label": "PERIODO",
+        "timeframe_week": "Settimana",
+        "timeframe_day": "Giorno",
+        "weather_overlay_label": "OVERLAY METEO",
+        "weather_overlay_csv_label": "OVERLAY METEO (CSV FEATURES)",
+        "prev_year_label": "DATI ANNO PRECEDENTE",
+        "map_not_found": "⚠️ Mappa non trovata: {path}",
+        "map_not_available": "Mappa non disponibile: {path}",
+        "src_label": "FONTE",
+        "simulated_badge": "SIMULATO",
+        "simulated_data": "dati simulati",
+        "load_header_section": "CARICO",
+        "load_header_subtitle": "PIATTAFORMA PREVISIONE CARICO ZONALE ITALIA",
+        "load_info_strip_title": "PREVISIONE CARICO ELETTRICO ZONALE:",
+        "kpi_max_forecast": "PREVISIONE MAX (GW)",
+        "kpi_min_forecast": "PREVISIONE MIN (GW)",
+        "kpi_avg_forecast": "PREVISIONE MEDIA (GW)",
+        "chart_title_weekly_load": "PREVISIONE CARICO SETTIMANALE",
+        "chart_title_daily_load": "PREVISIONE CARICO GIORNALIERA",
+        "forecast_window_label": "FINESTRA DI PREVISIONE",
+        "today_forecast_label": "PREVISIONE DI OGGI",
+        "key_metrics_label": "METRICHE CHIAVE",
+        "caption_forecast_vs_hist": "previsione vs media storica",
+        "caption_avg_conf_interval": "intervallo di confidenza medio",
+        "caption_model_fit": "accuratezza del modello",
+        "yaxis_load": "Carico (GW)",
+        "pv_header_section": "PV",
+        "pv_header_subtitle": "PIATTAFORMA PREVISIONE PRODUZIONE FOTOVOLTAICA ITALIA",
+        "installed_capacity_label": "CAPACITÀ INSTALLATA",
+        "pv_info_strip_title": "PREVISIONE PRODUZIONE FOTOVOLTAICA:",
+        "kpi_peak_forecast": "PICCO PREVISTO (GW)",
+        "kpi_avg_production": "PRODUZIONE MEDIA (GW)",
+        "kpi_total_energy": "ENERGIA TOTALE (GWh)",
+        "chart_title_weekly_pv": "PREVISIONE PV SETTIMANALE",
+        "chart_title_daily_pv": "PREVISIONE PV GIORNALIERA",
+        "today_pv_forecast_label": "PREVISIONE PV DI OGGI",
+        "key_metrics_pv_label": "METRICHE CHIAVE PV",
+        "caption_capacity_factor": "capacity factor medio",
+        "caption_installed_capacity": "capacità installata",
+        "yaxis_production": "Produzione (GW)",
+        "label_energy": "ENERGIA",
+        "cmp_header_section": "CONFRONTO",
+        "cmp_header_subtitle": "PREVISIONE VS REALE & ANALISI ACCURATEZZA",
+        "resource_label": "RISORSA",
+        "model_load_label": "⚡ CARICO",
+        "model_pv_label": "☀️ PV",
+        "time_horizon_label": "ORIZZONTE TEMPORALE",
+        "lead_time_emissions_label": "LEAD TIME DELLE EMISSIONI",
+        "insufficient_data_msg": (
+            "📈 **Ancora poche emissioni storiche per questa analisi.** "
+            "Al momento risultano **{n_runs} emissione/i** salvate per {model} · {zone} "
+            "(prima: {first_dt}). Un forecast diventa confrontabile con il dato reale solo "
+            "quando la sua data target è trascorsa ed è stata osservata da un run successivo — "
+            "quindi serve almeno qualche giorno di emissioni consecutive prima che questa pagina "
+            "si popoli. Torna a controllare tra un paio di giorni."
+        ),
+        "ts_comparison_title": "Confronto serie storica (mostra la settimana selezionata)",
+        "error_metrics_title": "Metriche di errore (Accuracy Breakdown)",
+        "no_obs_caption": "Nessuna osservazione ancora disponibile per i lead time selezionati.",
+        "error_by_hour_title": "Errore per Ora del Giorno",
+        "error_vs_lead_title": "Errore vs Lead Time",
+        "hours_before_suffix": "h prima",
+        "hour_hover_label": "Ora",
+    },
+    "en": {
+        "app_title": "Electricity Forecast Platform",
+        "app_brand": "ENERGY FORECAST",
+        "nav_load": "LOAD",
+        "nav_pv": "PV",
+        "nav_comparison": "COMPARISON",
+        "nav_load_help": "Zonal electric load forecast",
+        "nav_pv_help": "Zonal photovoltaic production forecast",
+        "nav_comparison_help": "Forecast vs actual comparison and accuracy analysis",
+        "mode_suffix": "MODE",
+        "err_missing_credentials": "missing credentials",
+        "err_client_creation": "client creation error: {e}",
+        "err_no_run": "no run found for model={model} zone={zone}",
+        "err_zero_records": "run_id={run_id} exists but has 0 records",
+        "err_query": "query error: {e}",
+        "err_comparison_query": "comparison query error: {e}",
+        "quick_selection": "QUICK SELECTION",
+        "italy_flag_label": "🇮🇹 ITALY",
+        "timeframe_label": "TIMEFRAME",
+        "timeframe_week": "Week",
+        "timeframe_day": "Day",
+        "weather_overlay_label": "WEATHER OVERLAY",
+        "weather_overlay_csv_label": "WEATHER OVERLAY (CSV FEATURES)",
+        "prev_year_label": "PREVIOUS YEAR DATA",
+        "map_not_found": "⚠️ Map not found: {path}",
+        "map_not_available": "Map not available: {path}",
+        "src_label": "SRC",
+        "simulated_badge": "SIMULATED",
+        "simulated_data": "simulated data",
+        "load_header_section": "LOAD",
+        "load_header_subtitle": "ZONAL ELECTRICITY LOAD FORECAST PLATFORM ITALY",
+        "load_info_strip_title": "ZONAL ELECTRICITY LOAD FORECAST:",
+        "kpi_max_forecast": "MAX FORECAST (GW)",
+        "kpi_min_forecast": "MIN FORECAST (GW)",
+        "kpi_avg_forecast": "AVG FORECAST (GW)",
+        "chart_title_weekly_load": "WEEKLY LOAD FORECAST",
+        "chart_title_daily_load": "DAILY LOAD FORECAST",
+        "forecast_window_label": "FORECAST WINDOW",
+        "today_forecast_label": "TODAY'S FORECAST",
+        "key_metrics_label": "KEY METRICS",
+        "caption_forecast_vs_hist": "forecast vs hist avg",
+        "caption_avg_conf_interval": "avg conf. interval",
+        "caption_model_fit": "model fit accuracy",
+        "yaxis_load": "Load (GW)",
+        "pv_header_section": "PV",
+        "pv_header_subtitle": "ZONAL PHOTOVOLTAIC PRODUCTION FORECAST PLATFORM ITALY",
+        "installed_capacity_label": "INSTALLED CAPACITY",
+        "pv_info_strip_title": "PV PRODUCTION FORECAST:",
+        "kpi_peak_forecast": "PEAK FORECAST (GW)",
+        "kpi_avg_production": "AVG PRODUCTION (GW)",
+        "kpi_total_energy": "TOTAL ENERGY (GWh)",
+        "chart_title_weekly_pv": "WEEKLY PV FORECAST",
+        "chart_title_daily_pv": "DAILY PV FORECAST",
+        "today_pv_forecast_label": "TODAY'S PV FORECAST",
+        "key_metrics_pv_label": "KEY METRICS PV",
+        "caption_capacity_factor": "avg capacity factor",
+        "caption_installed_capacity": "installed capacity",
+        "yaxis_production": "Production (GW)",
+        "label_energy": "ENERGY",
+        "cmp_header_section": "COMPARISON",
+        "cmp_header_subtitle": "FORECAST VS ACTUAL & ACCURACY ANALYSIS",
+        "resource_label": "RESOURCE",
+        "model_load_label": "⚡ LOAD",
+        "model_pv_label": "☀️ PV",
+        "time_horizon_label": "TIME HORIZON",
+        "lead_time_emissions_label": "FORECAST LEAD TIME",
+        "insufficient_data_msg": (
+            "📈 **Not enough historical emissions yet for this analysis.** "
+            "Right now there are **{n_runs} emission(s)** saved for {model} · {zone} "
+            "(first: {first_dt}). A forecast becomes comparable to the actual value only "
+            "once its target date has passed and it has been observed by a later run — "
+            "so it takes at least a few days of consecutive emissions before this page "
+            "fills in. Check back in a couple of days."
+        ),
+        "ts_comparison_title": "Time-series Comparison (shows selected week)",
+        "error_metrics_title": "Error Metrics (Accuracy Breakdown)",
+        "no_obs_caption": "No observations available yet for the selected lead times.",
+        "error_by_hour_title": "Error by Hour of Day",
+        "error_vs_lead_title": "Error vs Lead Time",
+        "hours_before_suffix": "h before",
+        "hour_hover_label": "Hour",
+    },
+}
+
+
+def T(key: str, **kwargs) -> str:
+    """Ritorna la stringa tradotta per la lingua attualmente selezionata."""
+    template = TR.get(st.session_state.lang, TR["it"]).get(key)
+    if template is None:
+        template = TR["it"].get(key, key)
+    return template.format(**kwargs) if kwargs else template
+
+
+def L(options: dict, key: str) -> str:
+    """Ritorna la label bilingue di un dizionario di opzioni (METEO_OPTIONS, ecc.)."""
+    lbl = options[key]["label"]
+    if isinstance(lbl, dict):
+        return lbl.get(st.session_state.lang, lbl.get("it", key))
+    return lbl
+
 
 # ── PAGE CONFIG ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Electricity Forecast Platform",
+    page_title=T("app_title"),
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -39,7 +228,7 @@ def _get_turso_client():
     url   = st.secrets.get("TURSO_URL")   or os.environ.get("TURSO_URL")
     token = st.secrets.get("TURSO_TOKEN") or os.environ.get("TURSO_TOKEN")
     if not url or not token:
-        st.session_state["_turso_error"] = "credenziali mancanti"
+        st.session_state["_turso_error"] = ("err_missing_credentials", {})
         return None
     if url.startswith("libsql://"):
         url = "https://" + url[len("libsql://"):]
@@ -49,7 +238,7 @@ def _get_turso_client():
     try:
         return libsql_client.create_client_sync(url=url, auth_token=token)
     except Exception as e:
-        st.session_state["_turso_error"] = f"create_client: {e}"
+        st.session_state["_turso_error"] = ("err_client_creation", {"e": str(e)})
         return None
 
 
@@ -73,7 +262,7 @@ def _load_from_db(model: str, zone: str) -> dict | None:
             [model, target_zone],
         )
         if not res.rows:
-            st.session_state["_turso_error"] = f"Nessun run per model={model} zone={target_zone}"
+            st.session_state["_turso_error"] = ("err_no_run", {"model": model, "zone": target_zone})
             return None
 
         run_id      = res.rows[0][0]
@@ -96,7 +285,7 @@ def _load_from_db(model: str, zone: str) -> dict | None:
         )
 
         if not res2.rows:
-            st.session_state["_turso_error"] = f"run_id={run_id} esiste ma 0 record"
+            st.session_state["_turso_error"] = ("err_zero_records", {"run_id": run_id})
             return None
 
         cols = [c.name if hasattr(c, "name") else c for c in res2.columns]
@@ -134,7 +323,7 @@ def _load_from_db(model: str, zone: str) -> dict | None:
         )
 
     except Exception as e:
-        st.session_state["_turso_error"] = f"query: {e}"
+        st.session_state["_turso_error"] = ("err_query", {"e": str(e)})
         return None
     finally:
         client.close()
@@ -275,7 +464,7 @@ def load_comparison_data(model: str, zone: str, lookback_days: int = 21) -> dict
                     run_dates=run_dates, max_lead_seen=max_lead_seen)
 
     except Exception as e:
-        st.session_state["_turso_error"] = f"comparison query: {e}"
+        st.session_state["_turso_error"] = ("err_comparison_query", {"e": str(e)})
         return empty
     finally:
         client.close()
@@ -521,58 +710,50 @@ if "cmp_date_range" not in st.session_state:
 
 # ── SIDEBAR – MODE SWITCHER ───────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("<div class='sb-logo'>TERNA</div>", unsafe_allow_html=True)
+    lang_choice = st.segmented_control(
+        label="lang_switch", options=["IT", "EN"],
+        default=st.session_state.lang.upper(),
+        selection_mode="single", key="lang_toggle",
+        label_visibility="collapsed")
+    if lang_choice is not None and lang_choice.lower() != st.session_state.lang:
+        st.session_state.lang = lang_choice.lower()
+        st.rerun()
+
+    st.markdown(f"<div class='sb-logo'>{T('app_brand')}</div>", unsafe_allow_html=True)
     st.markdown("<hr class='sb-divider'>", unsafe_allow_html=True)
 
     mode = st.session_state.dashboard_mode
 
-    if st.button("⚡\nLOAD", key="sb_load", use_container_width=True,
-                 help="Previsione carico elettrico zonale"):
+    if st.button(f"⚡\n{T('nav_load')}", key="sb_load", use_container_width=True,
+                 help=T("nav_load_help")):
         st.session_state.dashboard_mode = "LOAD"
         st.rerun()
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
-    if st.button("☀️\nPV", key="sb_pv", use_container_width=True,
-                 help="Previsione produzione fotovoltaica zonale"):
+    if st.button(f"☀️\n{T('nav_pv')}", key="sb_pv", use_container_width=True,
+                 help=T("nav_pv_help")):
         st.session_state.dashboard_mode = "PV"
         st.rerun()
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
-    if st.button("📊\nCOMPARISON", key="sb_cmp", use_container_width=True,
-                 help="Forecast vs Actual & Accuracy Analysis"):
+    if st.button(f"📊\n{T('nav_comparison')}", key="sb_cmp", use_container_width=True,
+                 help=T("nav_comparison_help")):
         st.session_state.dashboard_mode = "COMPARISON"
         st.rerun()
 
     st.markdown("<hr class='sb-divider' style='margin-top:16px'>", unsafe_allow_html=True)
     _icons  = {"LOAD": "⚡", "PV": "☀️", "COMPARISON": "📊"}
     _colors = {"LOAD": "#7be2ff", "PV": "#ffd700", "COMPARISON": "#ff8c42"}
+    _labels = {"LOAD": T("nav_load"), "PV": T("nav_pv"), "COMPARISON": T("nav_comparison")}
     active_icon  = _icons.get(mode, "⚡")
     active_color = _colors.get(mode, "#7be2ff")
-    active_label = mode
+    active_label = _labels.get(mode, mode)
     st.markdown(
         f"<div style='font-family:Courier New,monospace;font-size:8px;color:{active_color};"
         f"text-align:center;padding:8px 4px;letter-spacing:.10em'>"
-        f"{active_icon} {active_label} MODE</div>",
-        unsafe_allow_html=True
-    )
-
-    # Status Turso DB
-    st.markdown("<hr class='sb-divider'>", unsafe_allow_html=True)
-    _url_raw = st.secrets.get("TURSO_URL") or os.environ.get("TURSO_URL")
-    _tok = st.secrets.get("TURSO_TOKEN") or os.environ.get("TURSO_TOKEN")
-    _url_used = st.session_state.get("_turso_url_used", "—")
-    _err = st.session_state.get("_turso_error", "non ancora caricato")
-    _color = "#2ecc71" if _err is None else ("#e6c343" if _err == "non ancora caricato" else "#e74c3c")
-    _msg = "OK — dati da DB" if _err is None else str(_err)
-    st.markdown(
-        f"<div style='font-family:Courier New,monospace;font-size:8px;color:#8b949e;padding:4px;word-break:break-all'>"
-        f"URL secret: {'✅' if _url_raw else '❌'}<br>"
-        f"TOKEN: {'✅' if _tok else '❌'}<br>"
-        f"URL usato: {_url_used}<br>"
-        f"<span style='color:{_color}'>{_msg}</span>"
-        f"</div>",
+        f"{active_icon} {active_label} {T('mode_suffix')}</div>",
         unsafe_allow_html=True
     )
 
@@ -812,34 +993,34 @@ def load_pv_data(zone: str) -> dict:
 
 # ── OVERLAY OPTIONS ───────────────────────────────────────────────────────────
 METEO_OPTIONS = {
-    "temperature_2m (°C)": dict(label="Temp 2m", unit="°C", color="#ff7f50"),
-    "apparent_temperature (°C)": dict(label="Temp percepita", unit="°C", color="#ffa07a"),
-    "cloud_cover (%)": dict(label="Copertura nuvole", unit="%", color="#a0a0c0"),
-    "wind_speed_10m (km/h)": dict(label="Vento 10m", unit="km/h", color="#90ee90"),
-    "direct_radiation (W/m²)": dict(label="Radiazione", unit="W/m²", color="#ffd700"),
-    "relative_humidity_2m (%)": dict(label="Umidità", unit="%", color="#87ceeb"),
+    "temperature_2m (°C)": dict(label={"it": "Temp 2m", "en": "Temp 2m"}, unit="°C", color="#ff7f50"),
+    "apparent_temperature (°C)": dict(label={"it": "Temp percepita", "en": "Apparent Temp"}, unit="°C", color="#ffa07a"),
+    "cloud_cover (%)": dict(label={"it": "Copertura nuvole", "en": "Cloud Cover"}, unit="%", color="#a0a0c0"),
+    "wind_speed_10m (km/h)": dict(label={"it": "Vento 10m", "en": "Wind 10m"}, unit="km/h", color="#90ee90"),
+    "direct_radiation (W/m²)": dict(label={"it": "Radiazione", "en": "Radiation"}, unit="W/m²", color="#ffd700"),
+    "relative_humidity_2m (%)": dict(label={"it": "Umidità", "en": "Humidity"}, unit="%", color="#87ceeb"),
 }
 
 PV_METEO_OPTIONS = {
-    "shortwave_radiation": dict(label="Rad. Globale", unit="W/m²", color="#ffd700"),
-    "direct_normal_irradiance": dict(label="DNI (Rad. Norm.)", unit="W/m²", color="#ffae19"),
-    "diffuse_radiation": dict(label="Rad. Diffusa", unit="W/m²", color="#ff8c00"),
-    "direct_radiation": dict(label="Rad. Diretta", unit="W/m²", color="#ffa500"),
-    "temperature_2m": dict(label="Temp 2m", unit="°C", color="#ff7f50"),
-    "apparent_temperature": dict(label="Temp Percepita", unit="°C", color="#ffa07a"),
-    "wind_speed_10m": dict(label="Vento 10m", unit="km/h", color="#90ee90"),
-    "cloud_cover": dict(label="Nuvole Totali", unit="%", color="#a0a0c0"),
-    "cloud_cover_low": dict(label="Nuvole Basse", unit="%", color="#87ceeb"),
-    "cloud_cover_mid": dict(label="Nuvole Medie", unit="%", color="#70a1ff"),
-    "cloud_cover_high": dict(label="Nuvole Alte", unit="%", color="#a4b0be"),
-    "precipitation": dict(label="Precipitazioni", unit="mm", color="#1e90ff"),
-    "snowfall": dict(label="Neve", unit="cm", color="#e0ffff"),
-    "snow_depth": dict(label="Altezza Neve", unit="m", color="#f0ffff"),
+    "shortwave_radiation": dict(label={"it": "Rad. Globale", "en": "Global Rad."}, unit="W/m²", color="#ffd700"),
+    "direct_normal_irradiance": dict(label={"it": "DNI (Rad. Norm.)", "en": "DNI (Normal Rad.)"}, unit="W/m²", color="#ffae19"),
+    "diffuse_radiation": dict(label={"it": "Rad. Diffusa", "en": "Diffuse Rad."}, unit="W/m²", color="#ff8c00"),
+    "direct_radiation": dict(label={"it": "Rad. Diretta", "en": "Direct Rad."}, unit="W/m²", color="#ffa500"),
+    "temperature_2m": dict(label={"it": "Temp 2m", "en": "Temp 2m"}, unit="°C", color="#ff7f50"),
+    "apparent_temperature": dict(label={"it": "Temp Percepita", "en": "Apparent Temp"}, unit="°C", color="#ffa07a"),
+    "wind_speed_10m": dict(label={"it": "Vento 10m", "en": "Wind 10m"}, unit="km/h", color="#90ee90"),
+    "cloud_cover": dict(label={"it": "Nuvole Totali", "en": "Total Cloud"}, unit="%", color="#a0a0c0"),
+    "cloud_cover_low": dict(label={"it": "Nuvole Basse", "en": "Low Cloud"}, unit="%", color="#87ceeb"),
+    "cloud_cover_mid": dict(label={"it": "Nuvole Medie", "en": "Mid Cloud"}, unit="%", color="#70a1ff"),
+    "cloud_cover_high": dict(label={"it": "Nuvole Alte", "en": "High Cloud"}, unit="%", color="#a4b0be"),
+    "precipitation": dict(label={"it": "Precipitazioni", "en": "Precipitation"}, unit="mm", color="#1e90ff"),
+    "snowfall": dict(label={"it": "Neve", "en": "Snowfall"}, unit="cm", color="#e0ffff"),
+    "snow_depth": dict(label={"it": "Altezza Neve", "en": "Snow Depth"}, unit="m", color="#f0ffff"),
 }
 
 PREV_YEAR_OPTIONS = {
-    "Prev_Year_Load (GW)": dict(label="Carico (GW)", unit="GW", color="#6a9fb5", axis="y1"),
-    "Prev_Year_Temp (°C)": dict(label="Temperatura (°C)", unit="°C", color="#d28445", axis="y2"),
+    "Prev_Year_Load (GW)": dict(label={"it": "Carico (GW)", "en": "Load (GW)"}, unit="GW", color="#6a9fb5", axis="y1"),
+    "Prev_Year_Temp (°C)": dict(label={"it": "Temperatura (°C)", "en": "Temperature (°C)"}, unit="°C", color="#d28445", axis="y2"),
 }
 
 
@@ -979,6 +1160,7 @@ def build_chart(
 
     if has_meteo:
         mc = METEO_OPTIONS[meteo_var]
+        mc_label = L(METEO_OPTIONS, meteo_var)
         m_hist = (
             hist[["datetime", meteo_var]].dropna()
             if meteo_var in hist.columns
@@ -994,10 +1176,10 @@ def build_chart(
             go.Scatter(
                 x=m_all["datetime"],
                 y=m_all[meteo_var],
-                name=mc["label"],
+                name=mc_label,
                 line=dict(color=mc["color"], width=1.4, dash="dot"),
                 opacity=0.85,
-                hovertemplate=f"%{{x|%d/%m %H:%M}}<br><b>%{{y:.1f}} {mc['unit']}</b><extra>{mc['label']}</extra>",
+                hovertemplate=f"%{{x|%d/%m %H:%M}}<br><b>%{{y:.1f}} {mc['unit']}</b><extra>{mc_label}</extra>",
                 yaxis="y2",
             )
         )
@@ -1006,6 +1188,7 @@ def build_chart(
     for p_var in prev_year_vars:
         if p_var in hist.columns or p_var in fore.columns:
             pc = PREV_YEAR_OPTIONS[p_var]
+            pc_label = L(PREV_YEAR_OPTIONS, p_var)
             p_hist = (
                 hist[["datetime", p_var]].dropna()
                 if p_var in hist.columns
@@ -1023,10 +1206,10 @@ def build_chart(
                 go.Scatter(
                     x=p_all["datetime"],
                     y=p_all[p_var],
-                    name=pc["label"],
+                    name=pc_label,
                     line=dict(color=pc["color"], width=1.5, dash="dash"),
                     opacity=0.85,
-                    hovertemplate=f"%{{x|%d/%m %H:%M}}<br><b>%{{y:.2f}} {pc['unit']}</b><extra>{pc['label']}</extra>",
+                    hovertemplate=f"%{{x|%d/%m %H:%M}}<br><b>%{{y:.2f}} {pc['unit']}</b><extra>{pc_label}</extra>",
                     yaxis=pc["axis"],
                 )
             )
@@ -1037,12 +1220,12 @@ def build_chart(
     y2_color = "#8b949e"
     if has_meteo:
         y2_labels.append(
-            f"{METEO_OPTIONS[meteo_var]['label']} ({METEO_OPTIONS[meteo_var]['unit']})"
+            f"{L(METEO_OPTIONS, meteo_var)} ({METEO_OPTIONS[meteo_var]['unit']})"
         )
         y2_color = METEO_OPTIONS[meteo_var]["color"]
     if has_prev_temp:
         pc_temp = PREV_YEAR_OPTIONS["Prev_Year_Temp (°C)"]
-        y2_labels.append(f"{pc_temp['label']} ({pc_temp['unit']})")
+        y2_labels.append(f"{L(PREV_YEAR_OPTIONS, 'Prev_Year_Temp (°C)')} ({pc_temp['unit']})")
         if not has_meteo:
             y2_color = pc_temp["color"]
 
@@ -1079,7 +1262,7 @@ def build_chart(
         ),
         yaxis=dict(
             title=dict(
-                text="Load (GW)",
+                text=T("yaxis_load"),
                 font=dict(
                     color="#8b949e", size=10, family="Courier New, monospace"
                 ),
@@ -1239,6 +1422,7 @@ def build_pv_chart(
 
     if has_meteo:
         mc = PV_METEO_OPTIONS[meteo_var]
+        mc_label = L(PV_METEO_OPTIONS, meteo_var)
         m_hist = (
             hist[["datetime", meteo_var]].dropna()
             if meteo_var in hist.columns
@@ -1254,10 +1438,10 @@ def build_pv_chart(
             go.Scatter(
                 x=m_all["datetime"],
                 y=m_all[meteo_var],
-                name=mc["label"],
+                name=mc_label,
                 line=dict(color=mc["color"], width=1.4, dash="dot"),
                 opacity=0.85,
-                hovertemplate=f"%{{x|%d/%m %H:%M}}<br><b>%{{y:.1f}} {mc['unit']}</b><extra>{mc['label']}</extra>",
+                hovertemplate=f"%{{x|%d/%m %H:%M}}<br><b>%{{y:.1f}} {mc['unit']}</b><extra>{mc_label}</extra>",
                 yaxis="y2",
             )
         )
@@ -1268,7 +1452,7 @@ def build_pv_chart(
     y2_color = "#8b949e"
     if has_meteo:
         mc_info = PV_METEO_OPTIONS[meteo_var]
-        y2_label = f"{mc_info['label']} ({mc_info['unit']})"
+        y2_label = f"{L(PV_METEO_OPTIONS, meteo_var)} ({mc_info['unit']})"
         y2_color = mc_info["color"]
 
     fig.update_layout(
@@ -1304,7 +1488,7 @@ def build_pv_chart(
         ),
         yaxis=dict(
             title=dict(
-                text="Production (GW)",
+                text=T("yaxis_production"),
                 font=dict(
                     color="#8b949e", size=10, family="Courier New, monospace"
                 ),
@@ -1341,11 +1525,11 @@ def build_pv_chart(
 #  DASHBOARD – LOAD
 # ══════════════════════════════════════════════════════════════════════════════
 def render_load_dashboard():
-    st.markdown("""
+    st.markdown(f"""
     <div class="t-app-header">
       <div class="t-app-logo">
-        <span>⚡</span> TERNA &nbsp;|&nbsp;
-        <span style="font-weight:400;color:#8b949e">PIATTAFORMA PREVISIONE CARICO ZONALE ITALIA</span>
+        <span>⚡</span> {T('load_header_section')} &nbsp;|&nbsp;
+        <span style="font-weight:400;color:#8b949e">{T('load_header_subtitle')}</span>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1353,14 +1537,14 @@ def render_load_dashboard():
     left_col, right_col = st.columns([4, 8], gap="small")
 
     with left_col:
-        st.markdown("<p class='t-panel-title' style='margin-top:8px'>SELEZIONE RAPIDA</p>",
+        st.markdown(f"<p class='t-panel-title' style='margin-top:8px'>{T('quick_selection')}</p>",
                     unsafe_allow_html=True)
 
         zone_options = ["ITALY"] + ZONE_ORDER
         chosen_zone = st.segmented_control(
             label="selezione_zona",
             options=zone_options,
-            format_func=lambda z: "🇮🇹 ITALIA" if z == "ITALY" else z,
+            format_func=lambda z: T("italy_flag_label") if z == "ITALY" else z,
             default=st.session_state.selected_zone,
             selection_mode="single",
             key="zone_toggle",
@@ -1379,7 +1563,7 @@ def render_load_dashboard():
         try:
             st.image(map_path, use_container_width=True)
         except Exception:
-            st.error(f"⚠️ Mappa non trovata: {map_path}")
+            st.error(T("map_not_found", path=map_path))
 
     with right_col:
         zone = st.session_state.selected_zone
@@ -1394,13 +1578,14 @@ def render_load_dashboard():
         fore_start = fore["datetime"].min().strftime("%b %d")
         fore_end = fore["datetime"].max().strftime("%b %d")
 
-        lbl_sim = (f"<span class='t-tag' style='color:#e74c3c; border-color:#e74c3c'>⚠ SIMULATO</span>"
+        lbl_sim = (f"<span class='t-tag' style='color:#e74c3c; border-color:#e74c3c'>⚠ {T('simulated_badge')}</span>"
                    if data["is_dummy"] else "")
-        lbl_src = f"<span class='t-tag'>SRC: {data['filename']}</span>"
+        src_value = T("simulated_data") if data["is_dummy"] else data['filename']
+        lbl_src = f"<span class='t-tag'>{T('src_label')}: {src_value}</span>"
 
         st.markdown(f"""
         <div class="t-info-strip">
-          <div>ZONAL ELECTRICITY LOAD FORECAST: <span style="color:{zc}; font-weight:700;">{zone}</span></div>
+          <div>{T('load_info_strip_title')} <span style="color:{zc}; font-weight:700;">{zone}</span></div>
           <div style="display:flex; align-items:center;">
             <span>📅 {date_start} – {date_end}</span>
             {lbl_src}{lbl_sim}
@@ -1412,10 +1597,11 @@ def render_load_dashboard():
 
         with ctrl_tf:
             st.markdown(
-                "<p style='font-family:Courier New,monospace;font-size:9px;color:#8b949e;margin-bottom:2px'>TIMEFRAME</p>",
+                f"<p style='font-family:Courier New,monospace;font-size:9px;color:#8b949e;margin-bottom:2px'>{T('timeframe_label')}</p>",
                 unsafe_allow_html=True)
             chosen_tf = st.segmented_control(
                 label="timeframe", options=["Week", "Day"],
+                format_func=lambda x: T("timeframe_week") if x == "Week" else T("timeframe_day"),
                 default=st.session_state.timeframe,
                 selection_mode="single", key="tf_toggle",
                 label_visibility="collapsed")
@@ -1423,11 +1609,11 @@ def render_load_dashboard():
 
         with ctrl_meteo:
             st.markdown(
-                "<p style='font-family:Courier New,monospace;font-size:9px;color:#8b949e;margin-bottom:2px'>OVERLAY METEO</p>",
+                f"<p style='font-family:Courier New,monospace;font-size:9px;color:#8b949e;margin-bottom:2px'>{T('weather_overlay_label')}</p>",
                 unsafe_allow_html=True)
             chosen = st.segmented_control(
                 label="meteo", options=list(METEO_OPTIONS.keys()),
-                format_func=lambda k: METEO_OPTIONS[k]["label"],
+                format_func=lambda k: L(METEO_OPTIONS, k),
                 default=st.session_state.meteo_var,
                 selection_mode="single", key="meteo_toggle",
                 label_visibility="collapsed")
@@ -1435,11 +1621,11 @@ def render_load_dashboard():
 
         with ctrl_prev:
             st.markdown(
-                "<p style='font-family:Courier New,monospace;font-size:9px;color:#8b949e;margin-bottom:2px'>PREVIOUS YEAR DATA</p>",
+                f"<p style='font-family:Courier New,monospace;font-size:9px;color:#8b949e;margin-bottom:2px'>{T('prev_year_label')}</p>",
                 unsafe_allow_html=True)
             chosen_prev = st.segmented_control(
                 label="prev_year", options=list(PREV_YEAR_OPTIONS.keys()),
-                format_func=lambda k: PREV_YEAR_OPTIONS[k]["label"],
+                format_func=lambda k: L(PREV_YEAR_OPTIONS, k),
                 default=st.session_state.prev_year_vars,
                 selection_mode="multi", key="prev_year_toggle",
                 label_visibility="collapsed")
@@ -1456,23 +1642,24 @@ def render_load_dashboard():
         st.markdown(f"""
         <div class="t-kpi-container">
           <div class="t-kpi-card">
-            <div class="t-kpi-label">MAX FORECAST (GW)</div>
+            <div class="t-kpi-label">{T('kpi_max_forecast')}</div>
             <div class="t-kpi-value" style="color:{zc}">{p_max:.1f}</div>
           </div>
           <div class="t-kpi-card">
-            <div class="t-kpi-label">MIN FORECAST (GW)</div>
+            <div class="t-kpi-label">{T('kpi_min_forecast')}</div>
             <div class="t-kpi-value" style="color:{zc}">{p_min:.1f}</div>
           </div>
           <div class="t-kpi-card">
-            <div class="t-kpi-label">AVG FORECAST (GW)</div>
+            <div class="t-kpi-label">{T('kpi_avg_forecast')}</div>
             <div class="t-kpi-value" style="color:{zc}">{p_avg:.1f}</div>
           </div>
         </div>""", unsafe_allow_html=True)
 
         tf = st.session_state.timeframe
+        chart_title = T("chart_title_weekly_load") if tf == "Week" else T("chart_title_daily_load")
         st.markdown(
-            f"<div class='t-chart-title'>{'WEEKLY' if tf == 'Week' else 'DAILY'} LOAD FORECAST ({zone})"
-            f" · FORECAST WINDOW: {fore_start} – {fore_end}</div>",
+            f"<div class='t-chart-title'>{chart_title} ({zone})"
+            f" · {T('forecast_window_label')}: {fore_start} – {fore_end}</div>",
             unsafe_allow_html=True)
 
         st.plotly_chart(
@@ -1503,7 +1690,7 @@ def render_load_dashboard():
         st.markdown(f"""
         <div class="t-bottom-grid">
           <div class="t-bottom-card">
-            <div class="t-bottom-label">TODAY'S FORECAST ({today_label}):</div>
+            <div class="t-bottom-label">{T('today_forecast_label')} ({today_label}):</div>
             <div class="t-bottom-vals">
               MAX&nbsp;<b style="color:{zc}">{t_max:.1f}</b> GW &nbsp;|&nbsp;
               MIN&nbsp;<b style="color:{zc}">{t_min:.1f}</b> GW &nbsp;|&nbsp;
@@ -1511,19 +1698,19 @@ def render_load_dashboard():
             </div>
           </div>
           <div class="t-bottom-card">
-            <div class="t-bottom-label">KEY METRICS ({zone}):</div>
+            <div class="t-bottom-label">{T('key_metrics_label')} ({zone}):</div>
             <div class="t-metrics-flex">
               <div>
                 <div class="t-flex-val {dw_cl}">{'+' if dw >= 0 else ''}{dw:.1f}%</div>
-                <div class="t-flex-sub">forecast vs hist avg</div>
+                <div class="t-flex-sub">{T('caption_forecast_vs_hist')}</div>
               </div>
               <div>
                 <div class="t-flex-val" style="color:#8b949e">{interval_str} GW</div>
-                <div class="t-flex-sub">avg conf. interval</div>
+                <div class="t-flex-sub">{T('caption_avg_conf_interval')}</div>
               </div>
               <div>
                 <div class="t-flex-val" style="color:{zc}">{r2_str}</div>
-                <div class="t-flex-sub">model fit accuracy</div>
+                <div class="t-flex-sub">{T('caption_model_fit')}</div>
               </div>
             </div>
           </div>
@@ -1534,11 +1721,11 @@ def render_load_dashboard():
 #  DASHBOARD – PV
 # ══════════════════════════════════════════════════════════════════════════════
 def render_pv_dashboard():
-    st.markdown("""
+    st.markdown(f"""
     <div class="t-app-header">
       <div class="t-app-logo">
-        <span class="pv">☀️</span> TERNA &nbsp;|&nbsp;
-        <span style="font-weight:400;color:#8b949e">PIATTAFORMA PREVISIONE PRODUZIONE FOTOVOLTAICA ITALIA</span>
+        <span class="pv">☀️</span> {T('pv_header_section')} &nbsp;|&nbsp;
+        <span style="font-weight:400;color:#8b949e">{T('pv_header_subtitle')}</span>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1548,14 +1735,14 @@ def render_pv_dashboard():
     left_col, right_col = st.columns([4, 8], gap="small")
 
     with left_col:
-        st.markdown("<p class='t-panel-title' style='margin-top:8px'>SELEZIONE RAPIDA</p>",
+        st.markdown(f"<p class='t-panel-title' style='margin-top:8px'>{T('quick_selection')}</p>",
                     unsafe_allow_html=True)
 
         zone_options = ["ITALY"] + ZONE_ORDER
         chosen_zone = st.segmented_control(
             label="selezione_zona_pv",
             options=zone_options,
-            format_func=lambda z: "🇮🇹 ITALIA" if z == "ITALY" else z,
+            format_func=lambda z: T("italy_flag_label") if z == "ITALY" else z,
             default=st.session_state.pv_zone,
             selection_mode="single",
             key="pv_zone_toggle",
@@ -1576,9 +1763,8 @@ def render_pv_dashboard():
         <div style="background:#161b22;border:1px solid #21262d;border-radius:5px;
                     padding:10px 12px;margin-bottom:8px;font-family:'Courier New',monospace">
           <div style="font-size:9px;color:#8b949e;letter-spacing:.08em;margin-bottom:4px">
-            CAPACITÀ INSTALLATA</div>
+            {T('installed_capacity_label')}</div>
           <div style="font-size:22px;font-weight:700;color:{pv_color}">{cap_gw:.1f} GW<sub style="font-size:12px;color:#8b949e">p</sub></div>
-          <div style="font-size:8px;color:#8b949e;margin-top:2px">fonte: TERNA</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1586,7 +1772,7 @@ def render_pv_dashboard():
         try:
             st.image(map_path, use_container_width=True)
         except Exception:
-            st.warning(f"Mappa non disponibile: {map_path}")
+            st.warning(T("map_not_available", path=map_path))
 
     with right_col:
         zone = st.session_state.pv_zone
@@ -1601,13 +1787,14 @@ def render_pv_dashboard():
         fore_start = fore["datetime"].min().strftime("%b %d")
         fore_end = fore["datetime"].max().strftime("%b %d")
 
-        lbl_sim = (f"<span class='t-tag' style='color:#e74c3c; border-color:#e74c3c'>⚠ SIMULATO</span>"
+        lbl_sim = (f"<span class='t-tag' style='color:#e74c3c; border-color:#e74c3c'>⚠ {T('simulated_badge')}</span>"
                    if data["is_dummy"] else "")
-        lbl_src = f"<span class='t-tag'>SRC: {data['filename']}</span>"
+        src_value = T("simulated_data") if data["is_dummy"] else data['filename']
+        lbl_src = f"<span class='t-tag'>{T('src_label')}: {src_value}</span>"
 
         st.markdown(f"""
         <div class="t-info-strip">
-          <div>☀️ PV PRODUCTION FORECAST: <span style="color:{zc}; font-weight:700;">{zone}</span></div>
+          <div>☀️ {T('pv_info_strip_title')} <span style="color:{zc}; font-weight:700;">{zone}</span></div>
           <div style="display:flex; align-items:center;">
             <span>📅 {date_start} – {date_end}</span>
             {lbl_src}{lbl_sim}
@@ -1619,10 +1806,11 @@ def render_pv_dashboard():
 
         with ctrl_tf:
             st.markdown(
-                "<p style='font-family:Courier New,monospace;font-size:9px;color:#8b949e;margin-bottom:2px'>TIMEFRAME</p>",
+                f"<p style='font-family:Courier New,monospace;font-size:9px;color:#8b949e;margin-bottom:2px'>{T('timeframe_label')}</p>",
                 unsafe_allow_html=True)
             chosen_tf = st.segmented_control(
                 label="pv_timeframe", options=["Week", "Day"],
+                format_func=lambda x: T("timeframe_week") if x == "Week" else T("timeframe_day"),
                 default=st.session_state.pv_timeframe,
                 selection_mode="single", key="pv_tf_toggle",
                 label_visibility="collapsed")
@@ -1630,11 +1818,11 @@ def render_pv_dashboard():
 
         with ctrl_meteo:
             st.markdown(
-                "<p style='font-family:Courier New,monospace;font-size:9px;color:#8b949e;margin-bottom:2px'>OVERLAY METEO (CSV FEATURES)</p>",
+                f"<p style='font-family:Courier New,monospace;font-size:9px;color:#8b949e;margin-bottom:2px'>{T('weather_overlay_csv_label')}</p>",
                 unsafe_allow_html=True)
             chosen_pv_meteo = st.segmented_control(
                 label="pv_meteo", options=list(PV_METEO_OPTIONS.keys()),
-                format_func=lambda k: PV_METEO_OPTIONS[k]["label"],
+                format_func=lambda k: L(PV_METEO_OPTIONS, k),
                 default=st.session_state.pv_meteo_var,
                 selection_mode="single", key="pv_meteo_toggle",
                 label_visibility="collapsed")
@@ -1649,24 +1837,25 @@ def render_pv_dashboard():
         st.markdown(f"""
         <div class="t-kpi-container">
           <div class="t-kpi-card">
-            <div class="t-kpi-label">PEAK FORECAST (GW)</div>
+            <div class="t-kpi-label">{T('kpi_peak_forecast')}</div>
             <div class="t-kpi-value" style="color:{zc}">{p_peak:.2f}</div>
           </div>
           <div class="t-kpi-card">
-            <div class="t-kpi-label">AVG PRODUCTION (GW)</div>
+            <div class="t-kpi-label">{T('kpi_avg_production')}</div>
             <div class="t-kpi-value" style="color:{zc}">{p_avg:.2f}</div>
           </div>
           <div class="t-kpi-card">
-            <div class="t-kpi-label">ENERGIA TOTALE (GWh)</div>
+            <div class="t-kpi-label">{T('kpi_total_energy')}</div>
             <div class="t-kpi-value" style="color:{zc}">{e_tot:.1f}</div>
           </div>
         </div>""", unsafe_allow_html=True)
 
         tf_pv = st.session_state.pv_timeframe
+        chart_title_pv = T("chart_title_weekly_pv") if tf_pv == "Week" else T("chart_title_daily_pv")
 
         st.markdown(
-            f"<div class='t-chart-title'>{'WEEKLY' if tf_pv == 'Week' else 'DAILY'} PV FORECAST ({zone})"
-            f" · FORECAST WINDOW: {fore_start} – {fore_end}</div>",
+            f"<div class='t-chart-title'>{chart_title_pv} ({zone})"
+            f" · {T('forecast_window_label')}: {fore_start} – {fore_end}</div>",
             unsafe_allow_html=True)
 
         st.plotly_chart(
@@ -1689,27 +1878,27 @@ def render_pv_dashboard():
         st.markdown(f"""
         <div class="t-bottom-grid">
           <div class="t-bottom-card">
-            <div class="t-bottom-label">TODAY'S PV FORECAST ({today_label}):</div>
+            <div class="t-bottom-label">{T('today_pv_forecast_label')} ({today_label}):</div>
             <div class="t-bottom-vals">
               PEAK&nbsp;<b style="color:{zc}">{t_peak:.2f}</b> GW &nbsp;|&nbsp;
               AVG&nbsp;<b style="color:{zc}">{t_avg:.2f}</b> GW &nbsp;|&nbsp;
-              ENERGIA&nbsp;<b style="color:{zc}">{t_energy:.1f}</b> GWh
+              {T('label_energy')}&nbsp;<b style="color:{zc}">{t_energy:.1f}</b> GWh
             </div>
           </div>
           <div class="t-bottom-card">
-            <div class="t-bottom-label">KEY METRICS PV ({zone}):</div>
+            <div class="t-bottom-label">{T('key_metrics_pv_label')} ({zone}):</div>
             <div class="t-metrics-flex">
               <div>
                 <div class="t-flex-val" style="color:{zc}">{cf:.1f}%</div>
-                <div class="t-flex-sub">capacity factor medio</div>
+                <div class="t-flex-sub">{T('caption_capacity_factor')}</div>
               </div>
               <div>
                 <div class="t-flex-val" style="color:#8b949e">{interval_str} GW</div>
-                <div class="t-flex-sub">avg conf. interval</div>
+                <div class="t-flex-sub">{T('caption_avg_conf_interval')}</div>
               </div>
               <div>
                 <div class="t-flex-val" style="color:{zc}">{cap:.1f} GW<span style="font-size:10px">p</span></div>
-                <div class="t-flex-sub">capacità installata</div>
+                <div class="t-flex-sub">{T('caption_installed_capacity')}</div>
               </div>
             </div>
           </div>
@@ -1808,7 +1997,7 @@ def build_error_by_hour_chart(merged: pd.DataFrame, leadtimes: list[int]) -> go.
     fig = go.Figure(go.Bar(
         x=by_hour.index, y=by_hour.values,
         marker_color="#e67e22",
-        hovertemplate="Ora %{x}:00<br><b>%{y:.2f}%</b><extra></extra>",
+        hovertemplate=f"{T('hour_hover_label')} %{{x}}:00<br><b>%{{y:.2f}}%</b><extra></extra>",
     ))
     fig.update_layout(
         paper_bgcolor="#10161d", plot_bgcolor="#10161d",
@@ -1847,11 +2036,11 @@ def build_error_vs_lead_chart(metrics: pd.DataFrame) -> go.Figure:
 #  DASHBOARD – COMPARISON
 # ══════════════════════════════════════════════════════════════════════════════
 def render_comparison_dashboard():
-    st.markdown("""
+    st.markdown(f"""
     <div class="t-app-header">
       <div class="t-app-logo">
-        <span style="color:#ff8c42">📊</span> TERNA &nbsp;|&nbsp;
-        <span style="font-weight:400;color:#8b949e">FORECAST VS ACTUAL &amp; ACCURACY ANALYSIS</span>
+        <span style="color:#ff8c42">📊</span> {T('cmp_header_section')} &nbsp;|&nbsp;
+        <span style="font-weight:400;color:#8b949e">{T('cmp_header_subtitle')}</span>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1859,20 +2048,20 @@ def render_comparison_dashboard():
     ctrl_res, ctrl_zone, ctrl_range, ctrl_lead = st.columns([2, 5, 3, 4])
 
     with ctrl_res:
-        st.markdown("<p class='t-panel-title'>RISORSA</p>", unsafe_allow_html=True)
+        st.markdown(f"<p class='t-panel-title'>{T('resource_label')}</p>", unsafe_allow_html=True)
         chosen_model = st.segmented_control(
             label="cmp_model", options=["load", "pv"],
-            format_func=lambda m: "⚡ LOAD" if m == "load" else "☀️ PV",
+            format_func=lambda m: T("model_load_label") if m == "load" else T("model_pv_label"),
             default=st.session_state.cmp_model, selection_mode="single",
             key="cmp_model_toggle", label_visibility="collapsed")
         st.session_state.cmp_model = chosen_model if chosen_model is not None else "load"
 
     with ctrl_zone:
-        st.markdown("<p class='t-panel-title'>SELEZIONE RAPIDA</p>", unsafe_allow_html=True)
+        st.markdown(f"<p class='t-panel-title'>{T('quick_selection')}</p>", unsafe_allow_html=True)
         zone_options = ["ITALY"] + ZONE_ORDER
         chosen_zone = st.segmented_control(
             label="cmp_zone", options=zone_options,
-            format_func=lambda z: "🇮🇹 ITALIA" if z == "ITALY" else z,
+            format_func=lambda z: T("italy_flag_label") if z == "ITALY" else z,
             default=st.session_state.cmp_zone, selection_mode="single",
             key="cmp_zone_toggle", label_visibility="collapsed")
         st.session_state.cmp_zone = chosen_zone if chosen_zone is not None else "ITALY"
@@ -1882,7 +2071,7 @@ def render_comparison_dashboard():
     data = load_comparison_data(model, zone)
 
     with ctrl_range:
-        st.markdown("<p class='t-panel-title'>TIME HORIZON</p>", unsafe_allow_html=True)
+        st.markdown(f"<p class='t-panel-title'>{T('time_horizon_label')}</p>", unsafe_allow_html=True)
         if not data["merged"].empty:
             idx = data["merged"].index
             default_start = idx.min().date()
@@ -1892,10 +2081,11 @@ def render_comparison_dashboard():
             default_start = default_end - pd.Timedelta(days=7)
         chosen_range = st.date_input(
             "cmp_range", value=(default_start, default_end),
+            min_value=datetime.date(2026, 9, 21),
             key="cmp_range_input", label_visibility="collapsed")
 
     with ctrl_lead:
-        st.markdown("<p class='t-panel-title'>LEAD TIME DELLE EMISSIONI</p>", unsafe_allow_html=True)
+        st.markdown(f"<p class='t-panel-title'>{T('lead_time_emissions_label')}</p>", unsafe_allow_html=True)
         lead_options = list(range(1, max(data["max_lead_seen"], 3) + 1))
         chosen_leads = st.multiselect(
             "cmp_leads", options=lead_options,
@@ -1910,14 +2100,7 @@ def render_comparison_dashboard():
     if data["merged"].empty or "Actual" not in data["merged"].columns:
         n_runs = data["n_runs"]
         first_dt = data["run_dates"][0][:10] if data["run_dates"] else "—"
-        st.info(
-            f"📈 **Ancora poche emissioni storiche per questa analisi.** "
-            f"Al momento risultano **{n_runs} emissione/i** salvate per {model.upper()} · {zone} "
-            f"(prima: {first_dt}). Un forecast diventa confrontabile con il dato reale solo "
-            f"quando la sua data target è trascorsa ed è stata osservata da un run successivo — "
-            f"quindi serve almeno qualche giorno di emissioni consecutive prima che questa pagina "
-            f"si popoli. Torna a controllare tra un paio di giorni."
-        )
+        st.info(T("insufficient_data_msg", n_runs=n_runs, model=model.upper(), zone=zone, first_dt=first_dt))
         return
 
     merged = data["merged"]
@@ -1934,7 +2117,7 @@ def render_comparison_dashboard():
     zc = ZONE_COLORS.get(zone, "#ff8c42")
 
     st.markdown(
-        f"<div class='t-chart-title'>Time-series Comparison (mostra la settimana selezionata) · "
+        f"<div class='t-chart-title'>{T('ts_comparison_title')} · "
         f"<span style='color:{zc}'>{model.upper()} · {zone}</span></div>",
         unsafe_allow_html=True,
     )
@@ -1945,13 +2128,18 @@ def render_comparison_dashboard():
 
     # ── Metriche di errore ───────────────────────────────────────────────────
     metrics_view = data["metrics"][data["metrics"]["lead_days"].isin(leadtimes)] if not data["metrics"].empty else pd.DataFrame()
+    if not metrics_view.empty:
+        metrics_view = metrics_view.copy()
+        metrics_view["Lead Time"] = metrics_view["lead_days"].apply(
+            lambda d: f"D-{int(d)} ({int(d) * 24}{T('hours_before_suffix')})"
+        )
 
     col_tbl, col_hour, col_lead = st.columns([5, 3, 3])
 
     with col_tbl:
-        st.markdown("<div class='t-chart-title'>Metriche di errore (Accuracy Breakdown)</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='t-chart-title'>{T('error_metrics_title')}</div>", unsafe_allow_html=True)
         if metrics_view.empty:
-            st.caption("Nessuna osservazione ancora disponibile per i lead time selezionati.")
+            st.caption(T("no_obs_caption"))
         else:
             show_cols = ["Lead Time", "MAE (MW)", "MAPE (%)", "RMSE (MW)", "Max Error (MW)", "Bias (MW)"]
             st.dataframe(
@@ -1960,7 +2148,7 @@ def render_comparison_dashboard():
             )
 
     with col_hour:
-        st.markdown("<div class='t-chart-title'>Error by Hour of Day</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='t-chart-title'>{T('error_by_hour_title')}</div>", unsafe_allow_html=True)
         if metrics_view.empty:
             st.caption("—")
         else:
@@ -1968,7 +2156,7 @@ def render_comparison_dashboard():
                              use_container_width=True, config={"displayModeBar": False})
 
     with col_lead:
-        st.markdown("<div class='t-chart-title'>Error vs Lead Time</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='t-chart-title'>{T('error_vs_lead_title')}</div>", unsafe_allow_html=True)
         if metrics_view.empty:
             st.caption("—")
         else:
