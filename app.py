@@ -2011,21 +2011,48 @@ HOUR_METRICS = {
     "WMAPE (%)":  "wmape",
 }
 
-def build_error_by_hour_chart(merged: pd.DataFrame, leadtimes: list[int],
-                               metric_key: str = "MAE (GW)") -> go.Figure:
-    """Grafico errore medio per ora del giorno, metrica selezionabile.
+# Palette colori per i lead time nel grafico per ora
+LEAD_COLORS = ["#e67e22", "#3498db", "#2ecc71", "#e74c3c", "#9b59b6", "#f1c40f", "#1abc9c"]
 
-    Le ore in cui l'actual è < 10 % del picco giornaliero vengono escluse
-    per evitare l'esplosione degli errori relativi (WMAPE) nelle ore notturne
-    o a bassa produzione.
+def _compute_hour_series(sub: pd.DataFrame, col: str, col_id: str) -> pd.Series:
+    """Calcola la serie per ora per un singolo lead time."""
+    err = sub[col] - sub["Actual"]
+    if col_id == "mae":
+        values = err.abs()
+    elif col_id == "rmse":
+        values = err ** 2
+    elif col_id == "bias":
+        values = err
+    elif col_id == "wmape":
+        nz = sub["Actual"].replace(0, np.nan)
+        values = err.abs() / nz * 100
+    else:
+        values = err.abs()
+    tmp = pd.DataFrame({"hour": sub["hour"].values, "val": values.values})
+    if col_id == "rmse":
+        return tmp.groupby("hour")["val"].mean().apply(np.sqrt).reindex(range(24))
+    return tmp.groupby("hour")["val"].mean().reindex(range(24))
+
+
+def build_error_by_hour_chart(merged: pd.DataFrame, leadtimes: list[int],
+                               metric_key: str = "MAE (GW)",
+                               view_mode: str = "Aggregato") -> go.Figure:
+    """Grafico errore per ora del giorno.
+
+    view_mode:
+      "Aggregato"      → una sola barra (media di tutti i lead time selezionati)
+      "Per lead time"  → una linea per ogni lead time sovrapposta
     """
     if "Actual" not in merged.columns:
         return go.Figure()
 
     NIGHT_THRESHOLD_FRAC = 0.10
     col_id = HOUR_METRICS.get(metric_key, "mae")
+    unit_label = "%" if col_id == "wmape" else "GW"
+    fmt = ".1f" if col_id == "wmape" else ".3f"
 
-    rows = []
+    # Prepara i dati filtrati per ogni lead time
+    per_lead = {}
     for lead in leadtimes:
         col = f"Forecast D-{lead}"
         if col not in merged.columns:
@@ -2036,60 +2063,72 @@ def build_error_by_hour_chart(merged: pd.DataFrame, leadtimes: list[int],
         sub["hour"] = sub.index.hour
         sub["date"] = sub.index.date
         daily_peak = sub.groupby("date")["Actual"].transform("max")
-        mask = sub["Actual"] >= daily_peak * NIGHT_THRESHOLD_FRAC
-        sub = sub[mask]
+        sub = sub[sub["Actual"] >= daily_peak * NIGHT_THRESHOLD_FRAC]
         if sub.empty:
             continue
-        err = sub[col] - sub["Actual"]
-        if col_id == "mae":
-            values = err.abs()
-        elif col_id == "rmse":
-            values = err ** 2          # media poi sqrt sotto
-        elif col_id == "bias":
-            values = err
-        elif col_id == "wmape":
-            # per ora: |err| / actual * 100
-            nz = sub["Actual"].replace(0, np.nan)
-            values = err.abs() / nz * 100
-        else:
-            values = err.abs()
-        rows.append(pd.DataFrame({"hour": sub["hour"].values, "val": values.values}))
+        per_lead[lead] = (col, sub)
 
-    if not rows:
+    if not per_lead:
         return go.Figure()
 
-    all_df = pd.concat(rows, ignore_index=True).dropna()
-    if col_id == "rmse":
-        by_hour = all_df.groupby("hour")["val"].mean().apply(np.sqrt).reindex(range(24))
-    else:
-        by_hour = all_df.groupby("hour")["val"].mean().reindex(range(24))
+    fig = go.Figure()
+    annotation_text = "* ore notturne/bassa prod. escluse (< 10 % picco giornaliero)"
 
-    # colore: rosso per bias negativo, arancio altrimenti
-    if col_id == "bias":
-        colors = ["#e74c3c" if (pd.notna(v) and v < 0) else "#e67e22" if pd.notna(v) else "rgba(0,0,0,0)"
-                  for v in by_hour.values]
-    else:
-        colors = ["#e67e22" if pd.notna(v) else "rgba(0,0,0,0)" for v in by_hour.values]
+    if view_mode == "Aggregato":
+        rows = []
+        for lead, (col, sub) in per_lead.items():
+            s = _compute_hour_series(sub, col, col_id)
+            rows.append(s)
+        all_series = pd.concat(rows, axis=1)
+        by_hour = all_series.mean(axis=1)
 
-    unit_label = "%" if col_id == "wmape" else "GW"
-    fmt = ".1f" if col_id == "wmape" else ".3f"
+        if col_id == "bias":
+            colors = ["#e74c3c" if (pd.notna(v) and v < 0) else "#e67e22" if pd.notna(v) else "rgba(0,0,0,0)"
+                      for v in by_hour.values]
+        else:
+            colors = ["#e67e22" if pd.notna(v) else "rgba(0,0,0,0)" for v in by_hour.values]
 
-    fig = go.Figure(go.Bar(
-        x=by_hour.index,
-        y=by_hour.fillna(0).values,
-        marker_color=colors,
-        hovertemplate=f"{T('hour_hover_label')} %{{x}}:00<br><b>%{{y:{fmt}}} {unit_label}</b><extra></extra>",
-    ))
+        fig.add_trace(go.Bar(
+            x=by_hour.index,
+            y=by_hour.fillna(0).values,
+            marker_color=colors,
+            hovertemplate=f"{T('hour_hover_label')} %{{x}}:00<br><b>%{{y:{fmt}}} {unit_label}</b><extra></extra>",
+        ))
+        fig.update_layout(showlegend=False)
+
+    else:  # Per lead time
+        for i, (lead, (col, sub)) in enumerate(per_lead.items()):
+            by_hour = _compute_hour_series(sub, col, col_id)
+            color = LEAD_COLORS[i % len(LEAD_COLORS)]
+            fig.add_trace(go.Scatter(
+                x=by_hour.index,
+                y=by_hour.values,
+                mode="lines+markers",
+                name=f"D-{lead}",
+                line=dict(color=color, width=1.5),
+                marker=dict(size=4, color=color),
+                hovertemplate=f"D-{lead} · {T('hour_hover_label')} %{{x}}:00<br><b>%{{y:{fmt}}} {unit_label}</b><extra></extra>",
+            ))
+        fig.update_layout(
+            showlegend=True,
+            legend=dict(
+                font=dict(color="#8b949e", size=8, family="Courier New, monospace"),
+                bgcolor="rgba(0,0,0,0)", orientation="h",
+                x=0, y=1.08,
+            ),
+        )
+
     fig.update_layout(
         paper_bgcolor="#10161d", plot_bgcolor="#10161d",
-        margin=dict(l=40, r=10, t=10, b=30), height=230,
+        margin=dict(l=40, r=10, t=20, b=30), height=230,
         xaxis=dict(gridcolor="#1e2630", tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace"),
                    dtick=4),
         yaxis=dict(title=dict(text=f"{metric_key}*",
                               font=dict(color="#8b949e", size=9, family="Courier New, monospace")),
-                   gridcolor="#1e2630", tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace")),
+                   gridcolor="#1e2630", zeroline=(col_id == "bias"), zerolinecolor="#30363d",
+                   tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace")),
         annotations=[dict(
-            text="* ore notturne/bassa prod. escluse (< 10 % picco giornaliero)",
+            text=annotation_text,
             xref="paper", yref="paper", x=0, y=-0.18,
             showarrow=False, font=dict(color="#555e6b", size=8, family="Courier New, monospace"),
             align="left",
@@ -2304,7 +2343,7 @@ def render_comparison_dashboard():
             )
 
     with col_hour:
-        h_title_col, h_sel_col = st.columns([3, 2])
+        h_title_col, h_sel_col, h_mode_col = st.columns([3, 2, 2])
         with h_title_col:
             st.markdown(f"<div class='t-chart-title'>{T('error_by_hour_title')}</div>", unsafe_allow_html=True)
         with h_sel_col:
@@ -2315,11 +2354,21 @@ def render_comparison_dashboard():
                 key="hour_metric_selector",
                 label_visibility="collapsed",
             )
+        with h_mode_col:
+            selected_hour_mode = st.selectbox(
+                "hour_view_mode",
+                options=["Aggregato", "Per lead time"],
+                index=0,
+                key="hour_view_mode_selector",
+                label_visibility="collapsed",
+            )
         if metrics_view.empty:
             st.caption("—")
         else:
             st.plotly_chart(
-                build_error_by_hour_chart(metrics_df, leadtimes, metric_key=selected_hour_metric),
+                build_error_by_hour_chart(metrics_df, leadtimes,
+                                          metric_key=selected_hour_metric,
+                                          view_mode=selected_hour_mode),
                 use_container_width=True, config={"displayModeBar": False},
             )
 
