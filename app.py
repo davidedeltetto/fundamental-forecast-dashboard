@@ -140,13 +140,157 @@ def _load_from_db(model: str, zone: str) -> dict | None:
         client.close()
 
 
+def _cmp_target_zone(model: str, zone: str) -> str:
+    z = zone.upper()
+    if z in ("ITALY", "ITA", "IT"):
+        return "ITA" if model == "load" else "ITALY"
+    return z
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_comparison_data(model: str, zone: str, lookback_days: int = 21) -> dict:
+    """
+    Ricostruisce, per model x zone, il confronto tra il valore reale (actual)
+    e le previsioni emesse in run diversi per la stessa data target — con il
+    lead time (D-1, D-2, ...) calcolato come differenza in giorni tra la
+    data del run (created_at) e la data target (ts).
+
+    Ritorna un dict con:
+      merged        : DataFrame indicizzato su ts, colonne Actual + Forecast D-N
+      metrics       : DataFrame errori (MAE, MAPE, RMSE, Max Error, Bias) per lead time
+      n_runs        : numero di run distinti trovati
+      run_dates     : lista (ordinata) delle date di emissione trovate
+      max_lead_seen : lead massimo (giorni) effettivamente presente nei dati
+    """
+    empty = dict(merged=pd.DataFrame(), metrics=pd.DataFrame(),
+                 n_runs=0, run_dates=[], max_lead_seen=0)
+
+    client = _get_turso_client()
+    if client is None:
+        return empty
+
+    target_zone = _cmp_target_zone(model, zone)
+    cutoff = (pd.Timestamp.utcnow().normalize()
+              - pd.Timedelta(days=lookback_days)).strftime("%Y-%m-%dT00:00:00Z")
+
+    try:
+        # Tutte le date di emissione disponibili (per il conteggio/diagnostica)
+        res_runs = client.execute(
+            "SELECT DISTINCT created_at FROM forecast_runs "
+            "WHERE model = ? AND zone = ? ORDER BY created_at",
+            [model, target_zone],
+        )
+        run_dates = [row[0] for row in res_runs.rows]
+
+        if not run_dates:
+            return empty
+
+        # Valori reali (dalla sezione 'historical' di ciascun run, quella più
+        # recente per ogni ts, così da avere l'ultima revisione disponibile)
+        res_act = client.execute(
+            "SELECT rec.ts, rec.actual_gw, fr.created_at "
+            "FROM forecast_records rec JOIN forecast_runs fr ON fr.id = rec.run_id "
+            "WHERE fr.model = ? AND fr.zone = ? AND rec.actual_gw IS NOT NULL "
+            "  AND rec.ts >= ? ORDER BY fr.created_at DESC",
+            [model, target_zone, cutoff],
+        )
+        actual_df = pd.DataFrame(res_act.rows, columns=["ts", "actual_gw", "run_created_at"])
+
+        # Tutte le previsioni emesse (sezione 'forecast') nella finestra
+        res_fc = client.execute(
+            "SELECT fr.created_at AS run_created_at, rec.ts, rec.predicted_gw "
+            "FROM forecast_records rec JOIN forecast_runs fr ON fr.id = rec.run_id "
+            "WHERE fr.model = ? AND fr.zone = ? AND rec.section = 'forecast' "
+            "  AND fr.created_at >= ? ORDER BY fr.created_at ASC, rec.ts ASC",
+            [model, target_zone, cutoff],
+        )
+        fc_df = pd.DataFrame(res_fc.rows, columns=["run_created_at", "ts", "predicted_gw"])
+
+        if fc_df.empty:
+            return dict(merged=pd.DataFrame(), metrics=pd.DataFrame(),
+                        n_runs=len(run_dates), run_dates=run_dates, max_lead_seen=0)
+
+        for df_ in (actual_df, fc_df):
+            df_["ts"] = pd.to_datetime(df_["ts"], utc=True, errors="coerce").dt.tz_localize(None)
+            df_["run_created_at"] = pd.to_datetime(df_["run_created_at"], utc=True, errors="coerce").dt.tz_localize(None)
+
+        if not actual_df.empty:
+            actual_df = actual_df.sort_values("run_created_at", ascending=False)
+            actual_df = actual_df.drop_duplicates(subset="ts", keep="first")
+            actual_df = actual_df[["ts", "actual_gw"]]
+
+        fc_df["lead_days"] = (fc_df["ts"].dt.normalize() - fc_df["run_created_at"].dt.normalize()).dt.days
+        fc_df = fc_df[(fc_df["lead_days"] >= 1) & (fc_df["lead_days"] <= 7)]
+        if fc_df.empty:
+            return dict(merged=pd.DataFrame(), metrics=pd.DataFrame(),
+                        n_runs=len(run_dates), run_dates=run_dates, max_lead_seen=0)
+
+        # Se più run coprono lo stesso (ts, lead_days) tiene il più recente
+        fc_df = fc_df.sort_values("run_created_at", ascending=False)
+        fc_df = fc_df.drop_duplicates(subset=["ts", "lead_days"], keep="first")
+
+        max_lead_seen = int(fc_df["lead_days"].max())
+
+        pivot = fc_df.pivot_table(index="ts", columns="lead_days", values="predicted_gw", aggfunc="first")
+        pivot = pivot.rename(columns={c: f"Forecast D-{int(c)}" for c in pivot.columns})
+        pivot = pivot.sort_index()
+
+        merged = pivot.copy()
+        if not actual_df.empty:
+            merged = merged.join(actual_df.set_index("ts")["actual_gw"], how="outer")
+        merged = merged.rename(columns={"actual_gw": "Actual"})
+        merged = merged.sort_index()
+
+        # ── Metriche di errore per lead time (solo dove Actual è disponibile) ──
+        metric_rows = []
+        if "Actual" in merged.columns:
+            for lead in sorted(fc_df["lead_days"].unique()):
+                col = f"Forecast D-{int(lead)}"
+                if col not in merged.columns:
+                    continue
+                sub = merged[[col, "Actual"]].dropna()
+                if sub.empty:
+                    continue
+                err = sub[col] - sub["Actual"]
+                mae = err.abs().mean()
+                rmse = np.sqrt((err ** 2).mean())
+                max_err = err.abs().max()
+                bias = err.mean()
+                nz = sub["Actual"].replace(0, np.nan)
+                mape = (err.abs() / nz).dropna()
+                mape_pct = mape.mean() * 100 if not mape.empty else np.nan
+                metric_rows.append({
+                    "Lead Time": f"D-{int(lead)} ({int(lead)*24}h prima)",
+                    "lead_days": int(lead),
+                    "MAE (MW)": round(mae * 1000, 0),
+                    "MAPE (%)": round(mape_pct, 1) if pd.notna(mape_pct) else np.nan,
+                    "RMSE (MW)": round(rmse * 1000, 0),
+                    "Max Error (MW)": round(max_err * 1000, 0),
+                    "Bias (MW)": round(bias * 1000, 0),
+                    "n_oss": len(sub),
+                })
+        metrics = pd.DataFrame(metric_rows)
+
+        return dict(merged=merged, metrics=metrics, n_runs=len(run_dates),
+                    run_dates=run_dates, max_lead_seen=max_lead_seen)
+
+    except Exception as e:
+        st.session_state["_turso_error"] = f"comparison query: {e}"
+        return empty
+    finally:
+        client.close()
+
+
 # ── CSS ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 [data-testid="stAppViewContainer"]   { background:#0d1117 !important; }
 [data-testid="stHeader"]             { background:transparent !important; }
 [data-testid="stMainBlockContainer"] { padding-top:0 !important; }
-.block-container                     { padding:0 1rem 1rem !important; }
+.block-container {
+    padding:0 1rem 1rem !important;
+    max-width: 100% !important;
+}
 
 /* Sidebar styling */
 [data-testid="stSidebar"] {
@@ -366,6 +510,14 @@ if "pv_timeframe" not in st.session_state:
     st.session_state.pv_timeframe = "Week"
 if "pv_meteo_var" not in st.session_state:
     st.session_state.pv_meteo_var = None
+if "cmp_model" not in st.session_state:
+    st.session_state.cmp_model = "load"
+if "cmp_zone" not in st.session_state:
+    st.session_state.cmp_zone = "NORD"
+if "cmp_leadtimes" not in st.session_state:
+    st.session_state.cmp_leadtimes = [1, 2, 3]
+if "cmp_date_range" not in st.session_state:
+    st.session_state.cmp_date_range = None
 
 # ── SIDEBAR – MODE SWITCHER ───────────────────────────────────────────────────
 with st.sidebar:
@@ -386,10 +538,19 @@ with st.sidebar:
         st.session_state.dashboard_mode = "PV"
         st.rerun()
 
+    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+
+    if st.button("📊\nCOMPARISON", key="sb_cmp", use_container_width=True,
+                 help="Forecast vs Actual & Accuracy Analysis"):
+        st.session_state.dashboard_mode = "COMPARISON"
+        st.rerun()
+
     st.markdown("<hr class='sb-divider' style='margin-top:16px'>", unsafe_allow_html=True)
-    active_icon = "⚡" if mode == "LOAD" else "☀️"
-    active_color = "#7be2ff" if mode == "LOAD" else "#ffd700"
-    active_label = "LOAD" if mode == "LOAD" else "PV"
+    _icons  = {"LOAD": "⚡", "PV": "☀️", "COMPARISON": "📊"}
+    _colors = {"LOAD": "#7be2ff", "PV": "#ffd700", "COMPARISON": "#ff8c42"}
+    active_icon  = _icons.get(mode, "⚡")
+    active_color = _colors.get(mode, "#7be2ff")
+    active_label = mode
     st.markdown(
         f"<div style='font-family:Courier New,monospace;font-size:8px;color:{active_color};"
         f"text-align:center;padding:8px 4px;letter-spacing:.10em'>"
@@ -1556,9 +1717,271 @@ def render_pv_dashboard():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  CHART – COMPARISON
+# ══════════════════════════════════════════════════════════════════════════════
+_LEAD_LINE_STYLES = {
+    1: dict(dash="solid",  width=2.0),
+    2: dict(dash="dash",   width=1.6),
+    3: dict(dash="dot",    width=1.6),
+    4: dict(dash="dashdot", width=1.4),
+    5: dict(dash="dash",   width=1.2),
+    6: dict(dash="dot",    width=1.2),
+    7: dict(dash="dashdot", width=1.0),
+}
+_LEAD_COLORS = ["#e67e22", "#3498db", "#9b59b6", "#2ecc71", "#e74c3c", "#f1c40f", "#1abc9c"]
+
+
+def build_comparison_chart(merged: pd.DataFrame, leadtimes: list[int], unit: str = "GW") -> go.Figure:
+    fig = go.Figure()
+
+    if "Actual" in merged.columns:
+        act = merged["Actual"].dropna()
+        fig.add_trace(go.Scatter(
+            x=act.index, y=act.values,
+            name="Actual (Consuntivo)",
+            line=dict(color="#f5f5f5", width=2.4),
+            hovertemplate=f"%{{x|%d/%m %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Actual</extra>",
+        ))
+
+    for i, lead in enumerate(sorted(leadtimes)):
+        col = f"Forecast D-{lead}"
+        if col not in merged.columns:
+            continue
+        s = merged[col].dropna()
+        if s.empty:
+            continue
+        style = _LEAD_LINE_STYLES.get(lead, dict(dash="dot", width=1.2))
+        color = _LEAD_COLORS[i % len(_LEAD_COLORS)]
+        fig.add_trace(go.Scatter(
+            x=s.index, y=s.values,
+            name=f"Forecast D-{lead}",
+            line=dict(color=color, width=style["width"], dash=style["dash"]),
+            hovertemplate=f"%{{x|%d/%m %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>D-{lead}</extra>",
+        ))
+
+    fig.update_layout(
+        paper_bgcolor="#10161d",
+        plot_bgcolor="#10161d",
+        margin=dict(l=50, r=16, t=14, b=36),
+        height=380,
+        hovermode="x unified",
+        hoverlabel=dict(bgcolor="#161b22", bordercolor="#21262d",
+                         font=dict(color="#e6edf3", size=11, family="Courier New, monospace")),
+        legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="right", x=1,
+                    font=dict(color="#8b949e", size=10, family="Courier New, monospace"),
+                    bgcolor="rgba(0,0,0,0)"),
+        xaxis=dict(gridcolor="#1e2630", showgrid=True, zeroline=False,
+                   tickformat="%d/%m\n%H:%M",
+                   tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace")),
+        yaxis=dict(
+            title=dict(text=f"Load ({unit})" if unit == "GW" else unit,
+                       font=dict(color="#8b949e", size=10, family="Courier New, monospace")),
+            gridcolor="#1e2630", showgrid=True, zeroline=False,
+            tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace"),
+        ),
+    )
+    return fig
+
+
+def build_error_by_hour_chart(merged: pd.DataFrame, leadtimes: list[int]) -> go.Figure:
+    if "Actual" not in merged.columns:
+        return go.Figure()
+
+    rows = []
+    for lead in leadtimes:
+        col = f"Forecast D-{lead}"
+        if col not in merged.columns:
+            continue
+        sub = merged[[col, "Actual"]].dropna()
+        if sub.empty:
+            continue
+        nz = sub["Actual"].replace(0, np.nan)
+        mape = (sub[col] - sub["Actual"]).abs() / nz * 100
+        rows.append(pd.DataFrame({"hour": sub.index.hour, "mape": mape.values}))
+
+    if not rows:
+        return go.Figure()
+
+    all_df = pd.concat(rows, ignore_index=True).dropna()
+    by_hour = all_df.groupby("hour")["mape"].mean().reindex(range(24))
+
+    fig = go.Figure(go.Bar(
+        x=by_hour.index, y=by_hour.values,
+        marker_color="#e67e22",
+        hovertemplate="Ora %{x}:00<br><b>%{y:.2f}%</b><extra></extra>",
+    ))
+    fig.update_layout(
+        paper_bgcolor="#10161d", plot_bgcolor="#10161d",
+        margin=dict(l=40, r=10, t=10, b=30), height=230,
+        xaxis=dict(gridcolor="#1e2630", tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace"),
+                   dtick=4),
+        yaxis=dict(title=dict(text="MAPE (%)", font=dict(color="#8b949e", size=9, family="Courier New, monospace")),
+                   gridcolor="#1e2630", tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace")),
+    )
+    return fig
+
+
+def build_error_vs_lead_chart(metrics: pd.DataFrame) -> go.Figure:
+    if metrics.empty:
+        return go.Figure()
+
+    fig = go.Figure(go.Scatter(
+        x=metrics["lead_days"], y=metrics["Bias (MW)"],
+        mode="markers", marker=dict(size=10, color="#8b949e"),
+        hovertemplate="D-%{x}<br>Bias: <b>%{y:.0f} MW</b><extra></extra>",
+    ))
+    fig.update_layout(
+        paper_bgcolor="#10161d", plot_bgcolor="#10161d",
+        margin=dict(l=40, r=10, t=10, b=30), height=230,
+        xaxis=dict(gridcolor="#1e2630", title=dict(text="Lead Time", font=dict(color="#8b949e", size=9, family="Courier New, monospace")),
+                   tickvals=metrics["lead_days"], ticktext=[f"D-{d}" for d in metrics["lead_days"]],
+                   tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace")),
+        yaxis=dict(title=dict(text="Error (MW)", font=dict(color="#8b949e", size=9, family="Courier New, monospace")),
+                   gridcolor="#1e2630", zeroline=True, zerolinecolor="#30363d",
+                   tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace")),
+    )
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DASHBOARD – COMPARISON
+# ══════════════════════════════════════════════════════════════════════════════
+def render_comparison_dashboard():
+    st.markdown("""
+    <div class="t-app-header">
+      <div class="t-app-logo">
+        <span style="color:#ff8c42">📊</span> TERNA &nbsp;|&nbsp;
+        <span style="font-weight:400;color:#8b949e">FORECAST VS ACTUAL &amp; ACCURACY ANALYSIS</span>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    ctrl_res, ctrl_zone, ctrl_range, ctrl_lead = st.columns([2, 5, 3, 4])
+
+    with ctrl_res:
+        st.markdown("<p class='t-panel-title'>RISORSA</p>", unsafe_allow_html=True)
+        chosen_model = st.segmented_control(
+            label="cmp_model", options=["load", "pv"],
+            format_func=lambda m: "⚡ LOAD" if m == "load" else "☀️ PV",
+            default=st.session_state.cmp_model, selection_mode="single",
+            key="cmp_model_toggle", label_visibility="collapsed")
+        st.session_state.cmp_model = chosen_model if chosen_model is not None else "load"
+
+    with ctrl_zone:
+        st.markdown("<p class='t-panel-title'>SELEZIONE RAPIDA</p>", unsafe_allow_html=True)
+        zone_options = ["ITALY"] + ZONE_ORDER
+        chosen_zone = st.segmented_control(
+            label="cmp_zone", options=zone_options,
+            format_func=lambda z: "🇮🇹 ITALIA" if z == "ITALY" else z,
+            default=st.session_state.cmp_zone, selection_mode="single",
+            key="cmp_zone_toggle", label_visibility="collapsed")
+        st.session_state.cmp_zone = chosen_zone if chosen_zone is not None else "ITALY"
+
+    model = st.session_state.cmp_model
+    zone = st.session_state.cmp_zone
+    data = load_comparison_data(model, zone)
+
+    with ctrl_range:
+        st.markdown("<p class='t-panel-title'>TIME HORIZON</p>", unsafe_allow_html=True)
+        if not data["merged"].empty:
+            idx = data["merged"].index
+            default_start = idx.min().date()
+            default_end = idx.max().date()
+        else:
+            default_end = pd.Timestamp.utcnow().date()
+            default_start = default_end - pd.Timedelta(days=7)
+        chosen_range = st.date_input(
+            "cmp_range", value=(default_start, default_end),
+            key="cmp_range_input", label_visibility="collapsed")
+
+    with ctrl_lead:
+        st.markdown("<p class='t-panel-title'>LEAD TIME DELLE EMISSIONI</p>", unsafe_allow_html=True)
+        lead_options = list(range(1, max(data["max_lead_seen"], 3) + 1))
+        chosen_leads = st.multiselect(
+            "cmp_leads", options=lead_options,
+            format_func=lambda d: f"Forecast D-{d}",
+            default=[d for d in st.session_state.cmp_leadtimes if d in lead_options] or lead_options[:3],
+            key="cmp_lead_select", label_visibility="collapsed")
+        st.session_state.cmp_leadtimes = chosen_leads if chosen_leads else lead_options[:3]
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    # ── Stato: dati insufficienti ───────────────────────────────────────────
+    if data["merged"].empty or "Actual" not in data["merged"].columns:
+        n_runs = data["n_runs"]
+        first_dt = data["run_dates"][0][:10] if data["run_dates"] else "—"
+        st.info(
+            f"📈 **Ancora poche emissioni storiche per questa analisi.** "
+            f"Al momento risultano **{n_runs} emissione/i** salvate per {model.upper()} · {zone} "
+            f"(prima: {first_dt}). Un forecast diventa confrontabile con il dato reale solo "
+            f"quando la sua data target è trascorsa ed è stata osservata da un run successivo — "
+            f"quindi serve almeno qualche giorno di emissioni consecutive prima che questa pagina "
+            f"si popoli. Torna a controllare tra un paio di giorni."
+        )
+        return
+
+    merged = data["merged"]
+    leadtimes = sorted(st.session_state.cmp_leadtimes)
+
+    if isinstance(chosen_range, tuple) and len(chosen_range) == 2:
+        start_d, end_d = chosen_range
+        mask = (merged.index.date >= start_d) & (merged.index.date <= end_d)
+        view = merged.loc[mask]
+    else:
+        view = merged
+
+    unit = "GW" if model == "load" else "GW"
+    zc = ZONE_COLORS.get(zone, "#ff8c42")
+
+    st.markdown(
+        f"<div class='t-chart-title'>Time-series Comparison (mostra la settimana selezionata) · "
+        f"<span style='color:{zc}'>{model.upper()} · {zone}</span></div>",
+        unsafe_allow_html=True,
+    )
+    st.plotly_chart(
+        build_comparison_chart(view, leadtimes, unit),
+        use_container_width=True, config={"displayModeBar": False},
+    )
+
+    # ── Metriche di errore ───────────────────────────────────────────────────
+    metrics_view = data["metrics"][data["metrics"]["lead_days"].isin(leadtimes)] if not data["metrics"].empty else pd.DataFrame()
+
+    col_tbl, col_hour, col_lead = st.columns([5, 3, 3])
+
+    with col_tbl:
+        st.markdown("<div class='t-chart-title'>Metriche di errore (Accuracy Breakdown)</div>", unsafe_allow_html=True)
+        if metrics_view.empty:
+            st.caption("Nessuna osservazione ancora disponibile per i lead time selezionati.")
+        else:
+            show_cols = ["Lead Time", "MAE (MW)", "MAPE (%)", "RMSE (MW)", "Max Error (MW)", "Bias (MW)"]
+            st.dataframe(
+                metrics_view[show_cols].set_index("Lead Time"),
+                use_container_width=True, height=38 * (len(metrics_view) + 1),
+            )
+
+    with col_hour:
+        st.markdown("<div class='t-chart-title'>Error by Hour of Day</div>", unsafe_allow_html=True)
+        if metrics_view.empty:
+            st.caption("—")
+        else:
+            st.plotly_chart(build_error_by_hour_chart(merged, leadtimes),
+                             use_container_width=True, config={"displayModeBar": False})
+
+    with col_lead:
+        st.markdown("<div class='t-chart-title'>Error vs Lead Time</div>", unsafe_allow_html=True)
+        if metrics_view.empty:
+            st.caption("—")
+        else:
+            st.plotly_chart(build_error_vs_lead_chart(metrics_view),
+                             use_container_width=True, config={"displayModeBar": False})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  ROUTER PRINCIPALE
 # ══════════════════════════════════════════════════════════════════════════════
 if st.session_state.dashboard_mode == "LOAD":
     render_load_dashboard()
-else:
+elif st.session_state.dashboard_mode == "PV":
     render_pv_dashboard()
+else:
+    render_comparison_dashboard()
