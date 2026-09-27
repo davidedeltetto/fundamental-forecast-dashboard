@@ -1972,19 +1972,27 @@ def build_comparison_chart(merged: pd.DataFrame, leadtimes: list[int], unit: str
     return fig
 
 
-def build_error_by_hour_chart(merged: pd.DataFrame, leadtimes: list[int]) -> go.Figure:
-    """Grafico MAE medio per ora del giorno.
+# Metriche disponibili nel grafico per ora del giorno
+HOUR_METRICS = {
+    "MAE (GW)":   "mae",
+    "RMSE (GW)":  "rmse",
+    "Bias (GW)":  "bias",
+    "WMAPE (%)":  "wmape",
+}
 
-    Usa MAE (non MAPE) per evitare l'esplosione nelle ore con produzione
-    vicina a zero (notte/alba/tramonto). Le ore in cui il picco giornaliero
-    locale è sotto la soglia NIGHT_THRESHOLD_FRAC vengono escluse dal calcolo
-    e mostrate come barre trasparenti, così la scala rimane leggibile.
+def build_error_by_hour_chart(merged: pd.DataFrame, leadtimes: list[int],
+                               metric_key: str = "MAE (GW)") -> go.Figure:
+    """Grafico errore medio per ora del giorno, metrica selezionabile.
+
+    Le ore in cui l'actual è < 10 % del picco giornaliero vengono escluse
+    per evitare l'esplosione degli errori relativi (WMAPE) nelle ore notturne
+    o a bassa produzione.
     """
     if "Actual" not in merged.columns:
         return go.Figure()
 
-    # Soglia: esclude ore in cui l'actual medio è < 10 % del picco giornaliero
     NIGHT_THRESHOLD_FRAC = 0.10
+    col_id = HOUR_METRICS.get(metric_key, "mae")
 
     rows = []
     for lead in leadtimes:
@@ -1996,35 +2004,58 @@ def build_error_by_hour_chart(merged: pd.DataFrame, leadtimes: list[int]) -> go.
             continue
         sub["hour"] = sub.index.hour
         sub["date"] = sub.index.date
-        # picco giornaliero per normalizzare la soglia
         daily_peak = sub.groupby("date")["Actual"].transform("max")
         mask = sub["Actual"] >= daily_peak * NIGHT_THRESHOLD_FRAC
         sub = sub[mask]
         if sub.empty:
             continue
-        mae_h = (sub[col] - sub["Actual"]).abs()
-        rows.append(pd.DataFrame({"hour": sub["hour"].values, "mae": mae_h.values}))
+        err = sub[col] - sub["Actual"]
+        if col_id == "mae":
+            values = err.abs()
+        elif col_id == "rmse":
+            values = err ** 2          # media poi sqrt sotto
+        elif col_id == "bias":
+            values = err
+        elif col_id == "wmape":
+            # per ora: |err| / actual * 100
+            nz = sub["Actual"].replace(0, np.nan)
+            values = err.abs() / nz * 100
+        else:
+            values = err.abs()
+        rows.append(pd.DataFrame({"hour": sub["hour"].values, "val": values.values}))
 
     if not rows:
         return go.Figure()
 
     all_df = pd.concat(rows, ignore_index=True).dropna()
-    by_hour = all_df.groupby("hour")["mae"].mean().reindex(range(24))
-    # ore notturne escluse restano NaN → barre assenti
-    colors = ["#e67e22" if pd.notna(v) else "rgba(0,0,0,0)" for v in by_hour.values]
+    if col_id == "rmse":
+        by_hour = all_df.groupby("hour")["val"].mean().apply(np.sqrt).reindex(range(24))
+    else:
+        by_hour = all_df.groupby("hour")["val"].mean().reindex(range(24))
+
+    # colore: rosso per bias negativo, arancio altrimenti
+    if col_id == "bias":
+        colors = ["#e74c3c" if (pd.notna(v) and v < 0) else "#e67e22" if pd.notna(v) else "rgba(0,0,0,0)"
+                  for v in by_hour.values]
+    else:
+        colors = ["#e67e22" if pd.notna(v) else "rgba(0,0,0,0)" for v in by_hour.values]
+
+    unit_label = "%" if col_id == "wmape" else "GW"
+    fmt = ".1f" if col_id == "wmape" else ".3f"
 
     fig = go.Figure(go.Bar(
         x=by_hour.index,
         y=by_hour.fillna(0).values,
         marker_color=colors,
-        hovertemplate=f"{T('hour_hover_label')} %{{x}}:00<br><b>%{{y:.0f}} MW</b><extra></extra>",
+        hovertemplate=f"{T('hour_hover_label')} %{{x}}:00<br><b>%{{y:{fmt}}} {unit_label}</b><extra></extra>",
     ))
     fig.update_layout(
         paper_bgcolor="#10161d", plot_bgcolor="#10161d",
         margin=dict(l=40, r=10, t=10, b=30), height=230,
         xaxis=dict(gridcolor="#1e2630", tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace"),
                    dtick=4),
-        yaxis=dict(title=dict(text="MAE (GW)*", font=dict(color="#8b949e", size=9, family="Courier New, monospace")),
+        yaxis=dict(title=dict(text=f"{metric_key}*",
+                              font=dict(color="#8b949e", size=9, family="Courier New, monospace")),
                    gridcolor="#1e2630", tickfont=dict(color="#8b949e", size=9, family="Courier New, monospace")),
         annotations=[dict(
             text="* ore notturne/bassa prod. escluse (< 10 % picco giornaliero)",
@@ -2175,12 +2206,24 @@ def render_comparison_dashboard():
             )
 
     with col_hour:
-        st.markdown(f"<div class='t-chart-title'>{T('error_by_hour_title')}</div>", unsafe_allow_html=True)
+        h_title_col, h_sel_col = st.columns([3, 2])
+        with h_title_col:
+            st.markdown(f"<div class='t-chart-title'>{T('error_by_hour_title')}</div>", unsafe_allow_html=True)
+        with h_sel_col:
+            selected_hour_metric = st.selectbox(
+                "hour_metric_sel",
+                options=list(HOUR_METRICS.keys()),
+                index=0,
+                key="hour_metric_selector",
+                label_visibility="collapsed",
+            )
         if metrics_view.empty:
             st.caption("—")
         else:
-            st.plotly_chart(build_error_by_hour_chart(merged, leadtimes),
-                             use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(
+                build_error_by_hour_chart(merged, leadtimes, metric_key=selected_hour_metric),
+                use_container_width=True, config={"displayModeBar": False},
+            )
 
     with col_lead:
         st.markdown(f"<div class='t-chart-title'>{T('error_vs_lead_title')}</div>", unsafe_allow_html=True)
