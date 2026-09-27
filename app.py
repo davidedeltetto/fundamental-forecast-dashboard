@@ -993,34 +993,34 @@ def load_pv_data(zone: str) -> dict:
 
 # ── OVERLAY OPTIONS ───────────────────────────────────────────────────────────
 METEO_OPTIONS = {
-    "temperature_2m (°C)": dict(label={"it": "Temp 2m", "en": "Temp 2m"}, unit="°C", color="#ff7f50"),
-    "apparent_temperature (°C)": dict(label={"it": "Temp percepita", "en": "Apparent Temp"}, unit="°C", color="#ffa07a"),
-    "cloud_cover (%)": dict(label={"it": "Copertura nuvole", "en": "Cloud Cover"}, unit="%", color="#a0a0c0"),
-    "wind_speed_10m (km/h)": dict(label={"it": "Vento 10m", "en": "Wind 10m"}, unit="km/h", color="#90ee90"),
-    "direct_radiation (W/m²)": dict(label={"it": "Radiazione", "en": "Radiation"}, unit="W/m²", color="#ffd700"),
-    "relative_humidity_2m (%)": dict(label={"it": "Umidità", "en": "Humidity"}, unit="%", color="#87ceeb"),
+    "temperature_2m (°C)": dict(label={"it": "Temperatura 2m (°C)", "en": "Temperature 2m (°C)"}, unit="°C", color="#ff7f50"),
+    "apparent_temperature (°C)": dict(label={"it": "Temperatura Percepita (°C)", "en": "Apparent Temperature (°C)"}, unit="°C", color="#ffa07a"),
+    "cloud_cover (%)": dict(label={"it": "Copertura Nuvolosa (%)", "en": "Cloud Cover (%)"}, unit="%", color="#a0a0c0"),
+    "wind_speed_10m (km/h)": dict(label={"it": "Velocità Vento 10m (km/h)", "en": "Wind Speed 10m (km/h)"}, unit="km/h", color="#90ee90"),
+    "direct_radiation (W/m²)": dict(label={"it": "Radiazione Solare (W/m²)", "en": "Solar Radiation (W/m²)"}, unit="W/m²", color="#ffd700"),
+    "relative_humidity_2m (%)": dict(label={"it": "Umidità Relativa (%)", "en": "Relative Humidity (%)"}, unit="%", color="#87ceeb"),
 }
 
 PV_METEO_OPTIONS = {
-    "shortwave_radiation": dict(label={"it": "Rad. Globale", "en": "Global Rad."}, unit="W/m²", color="#ffd700"),
-    "direct_normal_irradiance": dict(label={"it": "DNI (Rad. Norm.)", "en": "DNI (Normal Rad.)"}, unit="W/m²", color="#ffae19"),
-    "diffuse_radiation": dict(label={"it": "Rad. Diffusa", "en": "Diffuse Rad."}, unit="W/m²", color="#ff8c00"),
-    "direct_radiation": dict(label={"it": "Rad. Diretta", "en": "Direct Rad."}, unit="W/m²", color="#ffa500"),
-    "temperature_2m": dict(label={"it": "Temp 2m", "en": "Temp 2m"}, unit="°C", color="#ff7f50"),
-    "apparent_temperature": dict(label={"it": "Temp Percepita", "en": "Apparent Temp"}, unit="°C", color="#ffa07a"),
-    "wind_speed_10m": dict(label={"it": "Vento 10m", "en": "Wind 10m"}, unit="km/h", color="#90ee90"),
-    "cloud_cover": dict(label={"it": "Nuvole Totali", "en": "Total Cloud"}, unit="%", color="#a0a0c0"),
-    "cloud_cover_low": dict(label={"it": "Nuvole Basse", "en": "Low Cloud"}, unit="%", color="#87ceeb"),
-    "cloud_cover_mid": dict(label={"it": "Nuvole Medie", "en": "Mid Cloud"}, unit="%", color="#70a1ff"),
-    "cloud_cover_high": dict(label={"it": "Nuvole Alte", "en": "High Cloud"}, unit="%", color="#a4b0be"),
-    "precipitation": dict(label={"it": "Precipitazioni", "en": "Precipitation"}, unit="mm", color="#1e90ff"),
-    "snowfall": dict(label={"it": "Neve", "en": "Snowfall"}, unit="cm", color="#e0ffff"),
-    "snow_depth": dict(label={"it": "Altezza Neve", "en": "Snow Depth"}, unit="m", color="#f0ffff"),
+    "shortwave_radiation": dict(label={"it": "Radiazione Globale (W/m²)", "en": "Global Radiation (W/m²)"}, unit="W/m²", color="#ffd700"),
+    "direct_normal_irradiance": dict(label={"it": "Irradianza Normale DNI (W/m²)", "en": "Direct Normal Irr. (W/m²)"}, unit="W/m²", color="#ffae19"),
+    "diffuse_radiation": dict(label={"it": "Radiazione Diffusa (W/m²)", "en": "Diffuse Radiation (W/m²)"}, unit="W/m²", color="#ff8c00"),
+    "direct_radiation": dict(label={"it": "Radiazione Diretta (W/m²)", "en": "Direct Radiation (W/m²)"}, unit="W/m²", color="#ffa500"),
+    "temperature_2m": dict(label={"it": "Temperatura 2m (°C)", "en": "Temperature 2m (°C)"}, unit="°C", color="#ff7f50"),
+    "apparent_temperature": dict(label={"it": "Temperatura Percepita (°C)", "en": "Apparent Temperature (°C)"}, unit="°C", color="#ffa07a"),
+    "wind_speed_10m": dict(label={"it": "Velocità Vento 10m (km/h)", "en": "Wind Speed 10m (km/h)"}, unit="km/h", color="#90ee90"),
+    "cloud_cover": dict(label={"it": "Copertura Nuvolosa (%)", "en": "Total Cloud Cover (%)"}, unit="%", color="#a0a0c0"),
+    "cloud_cover_low": dict(label={"it": "Nubi Basse (%)", "en": "Low Cloud Cover (%)"}, unit="%", color="#87ceeb"),
+    "cloud_cover_mid": dict(label={"it": "Nubi Medie (%)", "en": "Mid Cloud Cover (%)"}, unit="%", color="#70a1ff"),
+    "cloud_cover_high": dict(label={"it": "Nubi Alte (%)", "en": "High Cloud Cover (%)"}, unit="%", color="#a4b0be"),
+    "precipitation": dict(label={"it": "Precipitazioni (mm)", "en": "Precipitation (mm)"}, unit="mm", color="#1e90ff"),
+    "snowfall": dict(label={"it": "Neve (cm)", "en": "Snowfall (cm)"}, unit="cm", color="#e0ffff"),
+    "snow_depth": dict(label={"it": "Altezza Manto Nevoso (m)", "en": "Snow Depth (m)"}, unit="m", color="#f0ffff"),
 }
 
 PREV_YEAR_OPTIONS = {
-    "Prev_Year_Load (GW)": dict(label={"it": "Carico (GW)", "en": "Load (GW)"}, unit="GW", color="#6a9fb5", axis="y1"),
-    "Prev_Year_Temp (°C)": dict(label={"it": "Temperatura (°C)", "en": "Temperature (°C)"}, unit="°C", color="#d28445", axis="y2"),
+    "Prev_Year_Load (GW)": dict(label={"it": "Carico Anno Prec. (GW)", "en": "Prev. Year Load (GW)"}, unit="GW", color="#6a9fb5", axis="y1"),
+    "Prev_Year_Temp (°C)": dict(label={"it": "Temp. Percepita Anno Prec. (°C)", "en": "Prev. Year App. Temp. (°C)"}, unit="°C", color="#d28445", axis="y2"),
 }
 
 
