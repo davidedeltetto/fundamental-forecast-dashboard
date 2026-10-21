@@ -336,13 +336,16 @@ def _cmp_target_zone(model: str, zone: str) -> str:
     return z
 
 
+
 @st.cache_data(ttl=300, show_spinner=False)
-def load_comparison_data(model: str, zone: str, lookback_days: int = 21) -> dict:
+def load_comparison_data(model: str, zone: str, lookback_days: int | None = None) -> dict:
     """
-    Ricostruisce, per model x zone, il confronto tra il valore reale (actual)
+    Ricostruisce, per model x zona, il confronto tra il valore reale (actual)
     e le previsioni emesse in run diversi per la stessa data target — con il
     lead time (D-1, D-2, ...) calcolato come differenza in giorni tra la
     data del run (created_at) e la data target (ts).
+
+    lookback_days=None -> parte dal primo run salvato (nessuna finestra mobile).
 
     Ritorna un dict con:
       merged        : DataFrame indicizzato su ts, colonne Actual + Forecast D-N
@@ -359,8 +362,10 @@ def load_comparison_data(model: str, zone: str, lookback_days: int = 21) -> dict
         return empty
 
     target_zone = _cmp_target_zone(model, zone)
-    cutoff = (pd.Timestamp.utcnow().normalize()
-              - pd.Timedelta(days=lookback_days)).strftime("%Y-%m-%dT00:00:00Z")
+    # lookback_days=None -> nessuna finestra mobile: parte dal primo run salvato
+    cutoff = None if lookback_days is None else (
+        pd.Timestamp.utcnow().normalize() - pd.Timedelta(days=lookback_days)
+    ).strftime("%Y-%m-%dT00:00:00Z")
 
     try:
         # Tutte le date di emissione disponibili (per il conteggio/diagnostica)
@@ -373,6 +378,11 @@ def load_comparison_data(model: str, zone: str, lookback_days: int = 21) -> dict
 
         if not run_dates:
             return empty
+
+        if cutoff is None:
+            _first = pd.to_datetime(run_dates[0], utc=True, errors="coerce")
+            cutoff = ("1970-01-01T00:00:00Z" if pd.isna(_first)
+                      else _first.normalize().strftime("%Y-%m-%dT00:00:00Z"))
 
         # Valori reali (dalla sezione 'historical' di ciascun run, quella più
         # recente per ogni ts, così da avere l'ultima revisione disponibile)
